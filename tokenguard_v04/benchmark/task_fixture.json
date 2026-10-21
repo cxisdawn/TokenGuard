@@ -1,0 +1,15 @@
+{
+  "schema_version": 1,
+  "task_id": "python-division-fix",
+  "provider": "deepseek",
+  "model": "deepseek-flash",
+  "prompt": "Fix the division bug in arithmetic.py. Run python -m pytest -v before and after your change. Change only arithmetic.py; do not modify tests. Fractional and negative division must return the correct true-division result. Keep the final response concise.",
+  "files": ["arithmetic.py", "test_arithmetic.py"],
+  "editable_files": ["arithmetic.py"],
+  "test_files": ["test_arithmetic.py"],
+  "timeout_seconds": 180,
+  "max_turns": 8,
+  "expected_tests": 504,
+  "expect_initial_failure": true,
+  "mock_edits": [{"path": "arithmetic.py", "old": "a // b", "new": "a / b"}]
+}

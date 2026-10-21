@@ -2,6 +2,8 @@
 
 当前版本说明；项目概览和环境创建步骤见[根 README](../README.md)。
 
+任务级 A/B 执行器已加入：参见 [TASK_EXPERIMENTS.md](TASK_EXPERIMENTS.md)。默认只预览计划；可通过本地 Fixture 子进程验证修复、压缩和独立测试验收，不调用付费模型。真实 Claude CLI 适配器尚未完成付费集成验证。
+
 ## 关闭与卸载
 
 启动 Claude 前设置 `TOKENGUARD_ENABLED=0` 即可关闭压缩。移除该变量后恢复。

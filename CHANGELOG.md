@@ -2,6 +2,9 @@
 
 ## v0.4
 
+- Paired project task runner with explicit snapshots, fresh sessions, AB/BA rounds, dry-run defaults and paid-session gates.
+- Independent pristine-test validation, protected-file checks, timeouts and bounded output reads.
+- Local bug-fix fixture agent, Claude process-contract tests and explicitly attached per-trial usage reports.
 - Conservative structured stdout strategies and fail-open Claude Code adapter.
 - Net character saving checks after recovery metadata.
 - Atomic, content-addressed artifacts; bounded selective recovery and sparse line indexes.
