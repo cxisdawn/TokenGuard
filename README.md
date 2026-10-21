@@ -1,4 +1,6 @@
-﻿# TokenGuard
+# TokenGuard
+
+[![tests](https://github.com/cxisdawn/TokenGuard/actions/workflows/tests.yml/badge.svg)](https://github.com/cxisdawn/TokenGuard/actions/workflows/tests.yml)
 
 面向编程 Agent 的保守工具输出压缩器：减少重复日志占用，保留失败信息，并提供本地原文恢复与可审计的实验流程。
 

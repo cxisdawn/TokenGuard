@@ -1,4 +1,4 @@
-﻿# Changelog
+# Changelog
 
 ## v0.4
 
@@ -8,6 +8,7 @@
 - Session/experiment audit and isolated installed-hook diagnostics.
 - Reproducible offline A/B fixtures with independent processes, snapshot and test checks.
 - Offline DeepSeek/Anthropic usage normalization, independent billing evidence and paired quality-aware reports.
+- Compatible Windows stat/fstat comparisons while retaining mutation and replacement checks.
 - Source-only repository publication and cross-platform CI configuration.
 
 ## Historical versions

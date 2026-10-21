@@ -1,4 +1,4 @@
-﻿"""Local sparse byte offsets for universal-newline UTF-8 artifacts.
+"""Local sparse byte offsets for universal-newline UTF-8 artifacts.
 
 Sidecars contain no log text. Validation checks source stat metadata, ordered
 bounds and a checksum. Corrupt/stale sidecars are rebuilt without editing source.
@@ -37,6 +37,14 @@ def _fingerprint(stat: os.stat_result) -> tuple[int, int, int, int]:
     return stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_ino & ((1 << 64)-1)
 
 
+def _same_file_state(left: os.stat_result, right: os.stat_result) -> bool:
+    # Windows stat(path) and fstat(fd) can expose different ctime semantics.
+    # Compare identity/size/mtime across APIs; compare full fingerprints only
+    # between results from the same API. See CPython issue #157671.
+    return (left.st_dev, left.st_ino, left.st_size, left.st_mtime_ns) == (
+        right.st_dev, right.st_ino, right.st_size, right.st_mtime_ns)
+
+
 def index_path(identifier: str) -> Path:
     # Keep the same identifier validation as the source artifact, without circular imports.
     if not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{64}', identifier):
@@ -49,8 +57,10 @@ def index_path(identifier: str) -> Path:
 
 
 def _read(path: Path, source: Path, target: int) -> Position:
-    stat = source.stat()
-    with path.open('rb') as stream:
+    with source.open('rb') as original, path.open('rb') as stream:
+        stat = os.fstat(original.fileno())
+        if not _same_file_state(source.stat(), stat):
+            raise ValueError('Artifact changed before index read')
         length = os.fstat(stream.fileno()).st_size
         if length > MAX_INDEX_BYTES:
             raise ValueError('Index exceeds size budget')
@@ -83,8 +93,8 @@ def _read(path: Path, source: Path, target: int) -> Position:
             remaining -= points
         if stream.read(32) != digest.digest():
             raise ValueError('Index checksum mismatch')
-    if _fingerprint(source.stat()) != _fingerprint(stat):
-        raise ValueError('Artifact changed during index read')
+        if _fingerprint(os.fstat(original.fileno())) != _fingerprint(stat) or not _same_file_state(source.stat(), stat):
+            raise ValueError('Artifact changed during index read')
     return Position(selected_line, selected_offset, total, count, 'reused')
 
 
@@ -138,7 +148,7 @@ def ensure_index(identifier: str, source: Path, target: int = 1, force: bool = F
                     if HEADER.size + count*POINT.size + 32 > MAX_INDEX_BYTES:
                         raise ValueError('Index exceeds size budget')
             total = (line-1 if last_end == size else line) if size else 0
-            if _fingerprint(os.fstat(original.fileno())) != _fingerprint(stat) or _fingerprint(source.stat()) != _fingerprint(stat):
+            if _fingerprint(os.fstat(original.fileno())) != _fingerprint(stat) or not _same_file_state(source.stat(), stat):
                 raise ValueError('Artifact changed during index build')
             output.seek(0)
             output.write(HEADER.pack(MAGIC, *_fingerprint(stat), total, count))

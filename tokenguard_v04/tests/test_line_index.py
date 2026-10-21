@@ -107,6 +107,58 @@ class TestLineIndex(unittest.TestCase):
         # Space reserved for the marker displaces output before the last scanned line.
         self.assertLess(resume,910)
         self.assertIn(f'{resume}: needle',grep_lines(identifier,'needle',start=resume,limit=1,context=0))
+    def test_path_handle_ctime_disagreement_preserves_index_reuse(self):
+        from types import SimpleNamespace
+        identifier=save_original('line\n'*400+'tail\n')
+        source=artifact_path(identifier)
+        original_stat=Path.stat
+        def stat_with_other_ctime(path,*args,**kwargs):
+            result=original_stat(path,*args,**kwargs)
+            if path != source:
+                return result
+            fields={name:getattr(result,name) for name in dir(result) if name.startswith('st_')}
+            fields['st_ctime_ns']+=100000000
+            return SimpleNamespace(**fields)
+        with patch.object(Path,'stat',stat_with_other_ctime):
+            self.assertEqual(ensure_index(identifier,source).status,'built')
+            self.assertEqual(read_lines(identifier,401,1),'tail\n')
+            self.assertEqual(events()[0][-1]['index_status'],'reused')
+    def test_handle_ctime_change_still_rejects_inflight_mutation(self):
+        from types import SimpleNamespace
+        identifier=save_original('line\n'*400)
+        source=artifact_path(identifier)
+        source_inode=source.stat().st_ino
+        real_fstat=os.fstat
+        source_calls=0
+        def changing_fstat(fd):
+            nonlocal source_calls
+            result=real_fstat(fd)
+            if result.st_ino!=source_inode:
+                return result
+            source_calls+=1
+            if source_calls==1:
+                return result
+            fields={name:getattr(result,name) for name in dir(result) if name.startswith('st_')}
+            fields['st_ctime_ns']+=1
+            return SimpleNamespace(**fields)
+        with patch('tokenguard.line_index.os.fstat',side_effect=changing_fstat):
+            with self.assertRaisesRegex(ValueError,'Artifact changed during index build'):
+                ensure_index(identifier,source,force=True)
+    def test_replaced_path_identity_still_rejected(self):
+        from types import SimpleNamespace
+        identifier=save_original('line\n'*400)
+        source=artifact_path(identifier)
+        original_stat=Path.stat
+        def replaced_stat(path,*args,**kwargs):
+            result=original_stat(path,*args,**kwargs)
+            if path!=source:
+                return result
+            fields={name:getattr(result,name) for name in dir(result) if name.startswith('st_')}
+            fields['st_ino']+=1
+            return SimpleNamespace(**fields)
+        with patch.object(Path,'stat',replaced_stat):
+            with self.assertRaisesRegex(ValueError,'Artifact changed during index build'):
+                ensure_index(identifier,source,force=True)
     def test_cli_index_and_range(self):
         identifier=save_original('one\ntwo needle\nthree\n')
         built=subprocess.run([sys.executable,str(ROOT/'tg.py'),'index',identifier],capture_output=True,text=True,check=True)
