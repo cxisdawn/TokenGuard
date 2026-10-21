@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from tokenguard.experiment import attach_usage,execute,prepare
 from tokenguard.experiment_report import report
+from tokenguard.experiment_preflight import check as preflight
 
 
 def main() -> int:
@@ -25,6 +26,8 @@ def main() -> int:
     run.add_argument('--max-paid-sessions',type=int,default=2)
     run.add_argument('--claude',default='claude')
     show=sub.add_parser('report');show.add_argument('experiment',type=Path)
+    probe=sub.add_parser('preflight');probe.add_argument('experiment',type=Path)
+    probe.add_argument('--claude',default='claude')
     attach=sub.add_parser('attach-usage');attach.add_argument('experiment',type=Path)
     attach.add_argument('--trial',required=True);attach.add_argument('--source',required=True,type=Path)
     attach.add_argument('--format',choices=['deepseek','anthropic'],required=True)
@@ -46,6 +49,10 @@ def main() -> int:
         elif args.command=='report':
             value=report(args.experiment)
             print(json.dumps({k:v for k,v in value.items() if k!='runs'},indent=2))
+        elif args.command=='preflight':
+            value=preflight(args.experiment,args.claude)
+            print(json.dumps(value,indent=2))
+            return 0 if value['local_checks_passed'] else 1
         else:
             print(attach_usage(args.experiment,args.trial,args.source,args.format,args.evidence,
                                args.coverage,args.request_count,args.billing))

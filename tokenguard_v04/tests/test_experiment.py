@@ -176,7 +176,7 @@ class TaskExperiments(unittest.TestCase):
             session=argv[argv.index('--session-id')+1]
             return {**result,'stdout':json.dumps({'session_id':session,'is_error':False,
                                                 'total_cost_usd':999,'usage':{'input_tokens':999}})}
-        with patch('tokenguard.experiment.shutil.which',return_value=sys.executable),patch('tokenguard.experiment.run_process',side_effect=fake):
+        with patch('tokenguard.claude_runtime.shutil.which',return_value=sys.executable),patch('tokenguard.experiment.run_process',side_effect=fake):
             exp.execute(folder,'claude',True,True)
         result=report(folder)
         self.assertEqual(result['successful_trials'],2)

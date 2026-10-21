@@ -4,12 +4,12 @@ import hashlib
 import json
 import os
 from pathlib import Path
-import shutil
 import sys
 import time
 import uuid
 
 from . import audit, usage
+from .claude_runtime import resolve_claude
 from .experiment_snapshot import changes, digest, read_spec, snapshot, write_snapshot
 from .experiment_validation import run_process, validate
 
@@ -167,17 +167,14 @@ def execute(folder: Path, driver: str = 'mock', execute_run: bool = False,
     with locked(folder):
         if (folder/'started.json').exists():
             raise ValueError('Experiment already started')
-        write_json(folder/'started.json',{'driver':driver,'timestamp':audit.timestamp()})
         agent_version='tokenguard-fixture-agent/1'
         if driver=='claude':
-            resolved=shutil.which(executable)
-            if not resolved or (os.name=='nt' and Path(resolved).suffix.lower()!='.exe'):
-                raise ValueError('Supply a native Claude executable; Windows .cmd/.bat launchers are unsupported')
-            executable=resolved
+            executable=resolve_claude(executable)['executable']
             version=run_process([executable,'--version'],folder,dict(os.environ),15)
-            if version['exit_code']!=0 or version['timed_out'] or not 1<=len(version['stdout'].strip())<=200:
+            if version['exit_code']!=0 or version['timed_out'] or version['outputs_truncated'] or not 1<=len(version['stdout'].strip())<=200:
                 raise ValueError('Unable to establish bounded Claude version')
             agent_version=version['stdout'].strip()
+        write_json(folder/'started.json',{'driver':driver,'timestamp':audit.timestamp()})
         write_json(folder/'runtime.json',{'agent_version':agent_version,'driver':driver})
         for trial in record['trials']:
             _run_trial(folder,record,trial,driver,executable,agent_version)

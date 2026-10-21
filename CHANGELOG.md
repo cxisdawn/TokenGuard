@@ -2,6 +2,8 @@
 
 ## v0.4
 
+- Local-only task preflight with help/version checks, owned Hook probes and expected initial-test validation.
+- Direct native binary discovery beside Windows npm Claude shims; launcher/version failures leave sessions unused.
 - Paired project task runner with explicit snapshots, fresh sessions, AB/BA rounds, dry-run defaults and paid-session gates.
 - Independent pristine-test validation, protected-file checks, timeouts and bounded output reads.
 - Local bug-fix fixture agent, Claude process-contract tests and explicitly attached per-trial usage reports.

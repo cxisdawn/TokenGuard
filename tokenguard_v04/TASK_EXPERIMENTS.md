@@ -2,7 +2,7 @@
 
 该执行器把“能压缩日志”与“能完成相同编程任务”分开验证。现有 `benchmark/run.py` 的固定日志实验继续保留。新增 `benchmark/task_runner.py` 支持真实 Python 项目快照、本地 Fixture Agent 和 Claude CLI 适配器。
 
-**本版本只完成本地 Mock 与 CLI 协议替身验证，没有执行真实付费 Claude A/B。** 本地执行成功不能证明模型任务质量、稳定 Token 节省或实际费用下降。
+**本版本完成了本地 Mock、CLI 协议替身和无模型本机预检，没有执行真实付费 Claude A/B。** 本地执行成功不能证明模型任务质量、稳定 Token 节省或实际费用下降。
 
 ## 本地完整流程（PowerShell，不调用模型）
 
@@ -52,13 +52,29 @@ Linux/macOS 使用 `.venv/bin/python` 和对应 shell 路径，子命令相同�
 
 ## Claude CLI：先预览，显式开启付费执行
 
+先重新 prepare 一轮（2 个全新会话），再运行本地预检；已经完成 Mock 的目录不能用于真实试验：
+
 ```powershell
-& $Python .\benchmark\task_runner.py run $Experiment --driver claude
+$LiveExperiment = (& $Python .\benchmark\task_runner.py prepare `
+  --project .\benchmark\fixture --task .\benchmark\task_fixture.json `
+  --output .\reports\live --rounds 1).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Preparation failed' }
+& $Python .\benchmark\task_runner.py preflight $LiveExperiment
+```
+
+`preflight` 只执行本机 `--version`、`--help`（包括隐藏 `--max-turns` 的 help 解析探针）、实验自有配置中的 Hook 子进程及可信快照的初始 pytest。不启动 Agent、不发起模型请求，不读取用户配置或凭据，不写 `started.json`。原始任务预期失败，因此 `initial_validation.passed=false`、3 个失败与 `checks.initial_task=true` 可以同时成立；后者表示原始失败已按预期复现。
+
+检查项还包括未使用的会话、快照/配置/运行代码一致性和明确禁用 Hook 的环境开关。成功时 `local_checks_passed=true`，退出码为 0；检查未通过时为 1，输入/状态拒绝为 2。每次结果保存在该目录下独立的 `preflight-*.json`。更新源码后需要重新 prepare，不能继续使用旧代码哈希的计划。
+
+预检通过只证明本地条件满足：认证、DeepSeek 网关实际路由、模型可用性和宿主对替换输出的接受仍是 unverified。隐藏参数的 help 解析也不等于真实任务中已验证其执行行为。
+
+```powershell
+& $Python .\benchmark\task_runner.py run $LiveExperiment --driver claude
 ```
 
 准备的轮数决定启动数量。真实运行必须同时显式提供 `--execute --allow-paid`；默认 `--max-paid-sessions 2` 只允许一轮配对，三轮需要显式提高到 6。该数量限制是 CLI 启动数，不是 API 请求数或账单上限。未经授权不要执行付费命令。
 
-真实执行的形式为 `run EXPERIMENT --driver claude --execute --allow-paid --max-paid-sessions N`，可用 `--claude PATH` 指定可执行文件。Windows 当前仅支持原生 `claude.exe`，拒绝 `.cmd/.bat` 包装器，避免 shell 解析 Prompt 或路径。框架不会安装或升级 Claude。
+真实执行的形式为 `run EXPERIMENT --driver claude --execute --allow-paid --max-paid-sessions N`，可用 `--claude PATH` 指定可执行文件。Windows 直接执行原生 `claude.exe`；若 PATH 命中 npm 的 `claude.cmd`/`claude.ps1`/`claude`，会定位同目录 `node_modules/@anthropic-ai/claude-code/bin/claude.exe` 并直接启动。不会读取或运行包装器，也不经 cmd/PowerShell 解释 Prompt 或路径。纯 JavaScript 的旧 npm 安装不做此自动回退，报告 `npm_native_binary_missing_or_linked`；可通过 `--claude` 指定现有原生程序。框架不会安装或升级 Claude。原生程序定位或版本检查失败时，尚未写入 `started.json`，可修复路径后重新检查。
 
 适配器采用官方 [Claude CLI 参数](https://code.claude.com/docs/en/cli-reference)：`--print --output-format json --session-id UUID --model MODEL --max-turns N`，Prompt 经标准输入传递。使用显式 Hook `--settings`、`--setting-sources user` 和 `--strict-mcp-config` 的空 MCP 配置。CLI 沿用用户层配置及权限，执行器不解析其配置文件内容，不修改全局配置，也不添加权限或 Bypass 参数。源项目设置文件没有复制，项目专属权限/Hook 没有迁移；用户层 Hook、组织策略、CLAUDE.md、自动记忆和其他宿主定制仍可能影响实验，尚未得到完整隔离认证。CLI 版本不兼容、权限拒绝或非交互审批失败均计入失败，不自动绕过。
 
