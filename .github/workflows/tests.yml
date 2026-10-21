@@ -1,0 +1,41 @@
+name: tests
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  regression:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.10', '3.12']
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: ${{ matrix.python }}
+      - run: python -m pip install -r requirements-dev.txt
+      - name: Current version regression
+        working-directory: tokenguard_v04
+        run: python -m pytest -q
+      - name: Manual hook protocol verification
+        working-directory: tokenguard_v04
+        run: python verify_hook.py
+      - name: Offline usage report demonstration
+        working-directory: tokenguard_v04
+        run: python benchmark/usage_demo.py
+      - name: Historical v0.1 tests
+        working-directory: tokenguard_v01
+        run: python -m unittest discover -s tests -v
+      - name: Historical v0.2 tests
+        working-directory: tokenguard_v02
+        run: python -m unittest discover -s tests -v
+      - name: Historical v0.3 tests
+        working-directory: tokenguard_v03
+        run: python -m unittest discover -s tests -v

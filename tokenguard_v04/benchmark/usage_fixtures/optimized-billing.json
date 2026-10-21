@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "scope": "session_total",
+  "source": "synthetic_fixture",
+  "session_id": "synthetic-optimized",
+  "request_ids": [
+    "synthetic-optimized-r1",
+    "synthetic-optimized-r2"
+  ],
+  "currency": "USD",
+  "amount": "0.0200",
+  "evidence_reference": "SYNTHETIC ONLY; arbitrary fixture amounts, not pricing or real billing"
+}

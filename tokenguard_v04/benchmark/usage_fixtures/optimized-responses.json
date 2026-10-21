@@ -1,0 +1,32 @@
+[
+  {
+    "id": "synthetic-optimized-r1",
+    "object": "chat.completion",
+    "model": "deepseek-flash",
+    "usage": {
+      "prompt_tokens": 800,
+      "completion_tokens": 100,
+      "total_tokens": 900,
+      "prompt_cache_hit_tokens": 0,
+      "prompt_cache_miss_tokens": 800,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    }
+  },
+  {
+    "id": "synthetic-optimized-r2",
+    "object": "chat.completion",
+    "model": "deepseek-flash",
+    "usage": {
+      "prompt_tokens": 1600,
+      "completion_tokens": 200,
+      "total_tokens": 1800,
+      "prompt_cache_hit_tokens": 0,
+      "prompt_cache_miss_tokens": 1600,
+      "prompt_tokens_details": {
+        "cached_tokens": 0
+      }
+    }
+  }
+]

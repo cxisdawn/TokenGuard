@@ -1,0 +1,52 @@
+# Local configuration and credentials
+.claude/
+.codex/
+.agents/
+.aws/
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+credentials*
+secrets*
+
+# Environments and Python caches
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+htmlcov/
+
+# Generated experiments, raw logs and artifacts
+reports/
+artifacts/
+indexes-v04/
+tg-data/
+.tokenguard/
+*.jsonl
+*.log
+baseline/
+optimized/
+tg-fixture/
+
+# Distributions and installer binaries
+build/
+dist/
+*.egg-info/
+*.zip
+*.tar
+*.tar.gz
+*.whl
+*.exe
+*.msi
+*.dll
+*.so
+
+# Editors and OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
