@@ -2,7 +2,7 @@
 
 该执行器把“能压缩日志”与“能完成相同编程任务”分开验证。现有 `benchmark/run.py` 的固定日志实验继续保留。新增 `benchmark/task_runner.py` 支持真实 Python 项目快照、本地 Fixture Agent 和 Claude CLI 适配器。
 
-**本版本完成了本地 Mock、CLI 协议替身和无模型本机预检，没有执行真实付费 Claude A/B。** 本地执行成功不能证明模型任务质量、稳定 Token 节省或实际费用下降。
+**本版本完成了本地 Mock、CLI 协议替身、无模型预检及一轮明确授权的真实 Claude A/B。** 真实两组均通过任务验收，但优化组输出不足阈值，压缩次数为 0；不能据此宣称 TokenGuard 节省 Token 或费用。
 
 ## 本地完整流程（PowerShell，不调用模型）
 
@@ -102,6 +102,8 @@ if ($LASTEXITCODE -ne 0) { throw 'Preparation failed' }
 CLI JSON 中的 session_id 必须与计划一致；非零退出、错误状态或超时不算成功。CLI 提供的 `total_cost_usd` 和聚合 `usage` 不自动当作原生供应商 usage 或账单导入。真实 CLI 的所有工具调用总数当前保持 unavailable；报告另列 Hook 观察到的 Bash 调用数。Hook 发出压缩候选也不自动证明宿主替换已对模型生效。
 
 ## 显式关联离线 Usage
+
+首轮真实任务的 CLI 输出确实包含 usage 汇总，但它没有自动导入为原生供应商响应。任务验收与 Hook 诊断可直接核实，原生请求完整覆盖、后端身份及账单仍缺少独立证据。该轮本地 pilot-report 将 CLI 汇总单独标为 unverified，不与 Mock 数值或供应商账单混合。
 
 每个 trial 执行后可绑定**仅包含 usage 的供应商响应导出**，无需日志正文：
 
