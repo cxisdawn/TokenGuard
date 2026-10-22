@@ -42,12 +42,17 @@ def events(filename: str = 'audit-v04.jsonl') -> tuple[list[dict], int]:
     return rows, malformed
 
 
-def summary(session_id: str | None = None, experiment_id: str | None = None) -> dict:
+def summary(session_id: str | None = None, experiment_id: str | None = None,
+            *, source: str | None = None) -> dict:
     rows, malformed = events()
     selected = [r for r in rows if (session_id is None or r.get('session_id') == session_id)
                 and (experiment_id is None or r.get('experiment_id') == experiment_id)]
-    compressed = [dict(r) for r in selected if r.get('event') == 'compression']
+    compressed = [dict(r) for r in selected if r.get('event') == 'compression' and
+                  (source is None or r.get('source') == source)]
     recovery = [r for r in selected if r.get('event') == 'recovery']
+    if source is not None:
+        ids = {r.get('compression_id') for r in compressed}
+        recovery = [r for r in recovery if r.get('compression_id') in ids]
     for row in compressed:
         own = [r for r in recovery if r.get('compression_id') == row.get('compression_id')]
         row['recovery_count'] = len(own)
@@ -64,7 +69,8 @@ def summary(session_id: str | None = None, experiment_id: str | None = None) -> 
             'token_estimate_scope': 'compressed tool stdout including metadata only; excludes recovery and task context',
             'net_character_saving_after_recovery': original-optimized-sum(r.get('returned_chars', 0) for r in recovery),
             'scope': 'filtered' if session_id is not None or experiment_id is not None else 'cumulative_v04',
-            'session_id': session_id, 'experiment_id': experiment_id, 'compressions': len(compressed),
+            'session_id': session_id, 'experiment_id': experiment_id, 'source_filter': source,
+            'compressions': len(compressed),
             'original_chars': original, 'optimized_chars': optimized, 'saved_chars': original-optimized,
             'character_reduction_ratio': (original-optimized)/original if original else 0,
             'recovery_count': len(recovery), 'returned_chars': sum(r.get('returned_chars', 0) for r in recovery),

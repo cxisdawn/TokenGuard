@@ -27,6 +27,9 @@ from .experiment import (BASE, audit_scope, command, load_experiment, locked,
                          prepare, write_json)
 from .experiment_snapshot import changes, digest, relative_file
 from .experiment_validation import run_process
+from .quality_protocol import MODES, evidence, pair_assessment, pytest_test_count, receipt
+from .quality_seed import activate_seed, build_seeds, checked_preflight, inside
+from .visible_tests import fingerprint
 
 INSTANCE = 'pylint-dev__pylint-6528'
 COMMIT = '273a8b25620467c1e5686aa8d2a1dbb8c02c78d0'
@@ -82,41 +85,18 @@ def fetch_instance(output: Path) -> Path:
     raise ValueError('Pinned task not found in public dataset')
 
 
-def visible_wrapper(image_id: str) -> str:
+def visible_wrapper(image_id: str, source_files: list[str] | None = None) -> str:
     """Same bytes in every arm; package-only mount keeps evaluator tests pristine."""
-    return '''"""Run the original visible tests inside the pinned benchmark image."""
-import os
-from pathlib import Path
-import subprocess
-import sys
-import uuid
-
-root = Path(__file__).resolve().parent
-name = 'tgq-visible-' + uuid.uuid4().hex
-args = ['docker', 'run', '--rm', '--name', name, '--network', 'none',
-        '--label', 'tokenguard.quality=' + os.environ.get('TOKENGUARD_EXPERIMENT_ID', 'local'),
-        '--label', 'tokenguard.role=visible-tests',
-        '--mount', 'type=bind,source=' + str(root / 'pylint') + ',target=/testbed/pylint,readonly',
-        '--env', 'PYTHONDONTWRITEBYTECODE=1', '--env', 'PYLINT_HOME=/tmp/tg-pylint',
-        '--workdir', '/testbed', IMAGE_ID,
-        '/opt/miniconda3/envs/testbed/bin/python', '-m', 'pytest', '-v', '--color=no',
-        '-p', 'no:cacheprovider', *sys.argv[1:]]
-if len(sys.argv) == 1:
-    args.extend(['tests/lint/unittest_lint.py', 'tests/test_self.py'])
-try:
-    result = subprocess.run(args, timeout=150)
-    code = result.returncode
-finally:
-    subprocess.run(['docker', 'rm', '-f', name], stdout=subprocess.DEVNULL,
-                   stderr=subprocess.DEVNULL, timeout=15)
-raise SystemExit(code)
-'''.replace('IMAGE_ID', repr(image_id))
+    worker = Path(__file__).with_name('visible_tests.py').read_text(encoding='utf-8')
+    return worker.replace('IMAGE_ID = None', 'IMAGE_ID = ' + repr(image_id)).replace(
+        'SOURCE_FILES = ()', 'SOURCE_FILES = ' + repr(tuple(source_files or ())))
 
 
 def prepare_quality(instance_file: Path, harness: Path, output: Path, rounds: int = 3,
                     model: str = 'deepseek-flash', compat_wheel: Path | None = None,
-                    max_turns: int = 20) -> Path:
+                    max_turns: int = 20, protocol: str = 'agent_driven') -> Path:
     require(type(max_turns) is int and 1 <= max_turns <= 100, 'max_turns must be 1..100')
+    require(protocol in MODES, 'Unknown quality protocol')
     row = instance(instance_file)
     harness = harness.resolve()
     harness_commit = checked(['git', 'rev-parse', 'HEAD'], harness)
@@ -178,7 +158,8 @@ def prepare_quality(instance_file: Path, harness: Path, output: Path, rounds: in
                 target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(content)
                 selected.append(name)
-        (project / 'pytest.py').write_text(visible_wrapper(image_id), encoding='utf-8')
+        editable = [p for p in selected if p.startswith('pylint/')]
+        (project / 'pytest.py').write_text(visible_wrapper(image_id, editable), encoding='utf-8')
         selected.append('pytest.py')
         python = str(Path(sys.executable).resolve()).replace('\\', '/')
         prompt = (row['problem_statement'] + '\n\n'
@@ -186,8 +167,10 @@ def prepare_quality(instance_file: Path, harness: Path, output: Path, rounds: in
                   'Only modify existing files under pylint/. Do not modify tests, configuration, or pytest.py. '
                   'Do not inspect credentials, user configuration, parent directories, reference patches, online solutions, '
                   'or git history. No network research. The local source snapshot has no git history. '
-                  'Dependencies and original tests are in a pinned local Docker image. '
-                  f'Before editing and after the fix, run this exact Bash command without pipes, truncation, '
+                  'Dependencies and original tests are in a pinned local Docker image. ' +
+                  ('The controller supplies an initial test observation below. After the fix, '
+                   if protocol == 'controlled_initial_log' else 'Before editing and after the fix, ') +
+                  f'run this exact Bash command without pipes, truncation, '
                   f'or redirection: "{python}" pytest.py\n'
                   'This helper runs the original tests with pytest -v in Docker; the complete output is intentional. '
                   'You may run additional diagnostics using the same helper or read the local source. '
@@ -207,7 +190,10 @@ def prepare_quality(instance_file: Path, harness: Path, output: Path, rounds: in
     # Neither the official hidden test patch nor the gold solution enters a worktree.
     write_json(folder / 'official-instance.json', row)
     plan = {'schema': 'tokenguard.swebench-quality/v1', 'instance_id': INSTANCE,
-            'image_id': image_id, 'upstream_image_id': upstream_image_id,
+            'image_id': image_id, 'upstream_image_id': upstream_image_id, 'protocol': protocol,
+            'initial_source_sha256': fingerprint(folder / 'snapshot', editable),
+            'visible_expected_tests': 169,
+            'required_command': f'"{python}" pytest.py',
             'upstream_source_head': head, 'image_repo_digests': details.get('RepoDigests', []),
             'compatibility_dependency': ({'name': 'tomlkit', 'version': '0.10.1', 'wheel_sha256': sha(compat_wheel),
                                          'reason': 'upstream image 0.13.2 breaks two existing TOML config tests'}
@@ -313,9 +299,21 @@ def preflight(folder: Path) -> dict:
     gold = evaluate(folder, plan, row, row['patch'], output / 'gold')
     f2p = original.get('tests_status', {}).get('FAIL_TO_PASS', {})
     p2p = original.get('tests_status', {}).get('PASS_TO_PASS', {})
-    visible = process([sys.executable, str(folder / 'snapshot/pytest.py')], folder / 'snapshot', 200)
+    receipt_dir = output / 'test-receipts'
+    visible = run_process([sys.executable, str(folder / 'snapshot/pytest.py')], folder / 'snapshot',
+                          {**os.environ, 'PYTHONUTF8': '1', 'TOKENGUARD_TEST_RECEIPTS_DIR': str(receipt_dir),
+                           'TOKENGUARD_TEST_SESSION_ID': 'controller-preflight',
+                           'TOKENGUARD_EXPERIMENT_ID': record['experiment_id'],
+                           'TOKENGUARD_TEST_ORIGIN': 'controller'}, 200)
     (output / 'visible.stdout.txt').write_bytes(visible['stdout'].encode('utf-8'))
     (output / 'visible.stderr.txt').write_bytes(visible['stderr'].encode('utf-8'))
+    receipts = list(receipt_dir.glob('*.json'))
+    require(len(receipts) == 1, 'Controller receipt missing or ambiguous')
+    visible_receipt = receipt(receipts[0], 'controller-preflight', record['experiment_id'])
+    visible_valid = (visible_receipt['source_before'] == visible_receipt['source_after'] == plan['initial_source_sha256'] and
+                     visible_receipt['image_id'] == plan['image_id'] and visible_receipt['full_suite_requested'] and
+                     visible_receipt['stdout_sha256'] == hashlib.sha256(visible['stdout'].encode()).hexdigest() and
+                     pytest_test_count(visible['stdout']) == plan['visible_expected_tests'])
     from .hook import handle
     with audit_scope(output / 'tg-data'):
         previous = {key: os.environ.get(key) for key in ('TOKENGUARD_SOURCE', 'TOKENGUARD_ENABLED')}
@@ -331,15 +329,21 @@ def preflight(folder: Path) -> dict:
                 else:
                     os.environ[key] = value
     result = {'schema': 'tokenguard.swebench-preflight/v1', 'model_api_calls': 0,
+              'protocol': plan.get('protocol', 'agent_driven'),
               'original': original, 'gold': gold, 'visible_test_exit': visible['exit_code'],
               'visible_stdout_chars': len(visible['stdout']), 'manual_hook_compressed': replacement is not None,
+              'visible_receipt_verified': visible_valid,
               'manual_hook_not_live_integration': True,
               'passed': original['evaluation_valid'] and len(f2p.get('failure', [])) == 4 and
                         not f2p.get('success') and len(p2p.get('success', [])) == 171 and
                         gold['resolved'] and visible['exit_code'] == 0 and not visible['timed_out'] and
-                        not visible['outputs_truncated'] and replacement is not None}
+                        not visible['outputs_truncated'] and replacement is not None and visible_valid}
+    if plan.get('protocol') == 'controlled_initial_log' and result['passed']:
+        result['seed_inputs'] = build_seeds(folder, record, output, visible, receipts[0])
     write_json(output / 'preflight.json', result)
-    write_json(folder / 'quality-preflight-latest.json', {'path': str(output / 'preflight.json'), 'passed': result['passed']})
+    write_json(folder / 'quality-preflight-latest.json', {
+        'path': str((output / 'preflight.json').relative_to(folder)), 'passed': result['passed'],
+        'sha256': sha(output / 'preflight.json'), 'plan_sha256': sha(folder / 'quality-plan.json')})
     return result
 
 
@@ -382,13 +386,13 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
     count = len(record['trials'])
     if not execute:
         return {'dry_run': True, 'sessions': count, 'model': record['task']['model'],
+                'protocol': plan.get('protocol', 'agent_driven'),
                 'max_turns_flag': record['task']['max_turns'], 'timeout_seconds': 600, 'baseline_mode': 'no_hook',
                 'benchmark': INSTANCE, 'paid_requests': 'multiple per session; billed cost unavailable'}
     require(allow_paid and type(max_paid_sessions) is int and count <= max_paid_sessions,
             'Paid execution needs explicit gates')
     require(not (folder / 'started.json').exists(), 'Sessions already consumed; prepare a new experiment')
-    marker = json.loads((folder / 'quality-preflight-latest.json').read_text(encoding='utf-8'))
-    require(marker['passed'], 'Official original/gold preflight has not passed')
+    preflight_result = checked_preflight(folder, plan, record)
     hashes = {str(p.relative_to(BASE)): sha(p) for p in sorted((BASE / 'tokenguard').glob('*.py'))}
     require(digest(hashes) == record['config']['tools_sha256'] and sys.version == record['config']['python'],
             'Runtime drift; prepare again')
@@ -402,15 +406,22 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
         write_json(folder / 'started.json', {'driver': 'claude', 'timestamp': audit.timestamp(), 'sessions': count})
         for trial in record['trials']:
             root = folder / 'trials' / trial['trial_id']
+            prompt, seed_delivery = record['task']['prompt'], None
+            if plan.get('protocol') == 'controlled_initial_log':
+                delivery = preflight_result['seed_inputs']['deliveries'][trial['trial_id']]
+                seed_delivery = activate_seed(folder, delivery, root)
+                prompt = inside(folder, delivery['prompt_path']).read_text(encoding='utf-8')
             env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1',
                    'TOKENGUARD_ENABLED': '1' if trial['arm'] == 'optimized' else '0',
                    'TOKENGUARD_DATA_DIR': str(root / 'tg-data'), 'TOKENGUARD_DIAGNOSTICS': '1',
-                   'TOKENGUARD_EXPERIMENT_ID': record['experiment_id'], 'TOKENGUARD_SOURCE': 'claude_hook'}
+                   'TOKENGUARD_EXPERIMENT_ID': record['experiment_id'], 'TOKENGUARD_SOURCE': 'claude_hook',
+                   'TOKENGUARD_TEST_RECEIPTS_DIR': str(root / 'test-receipts'),
+                   'TOKENGUARD_TEST_SESSION_ID': trial['session_id'], 'TOKENGUARD_TEST_ORIGIN': 'agent'}
             argv = command(folder, record, trial, 'claude', executable)
             argv[argv.index('json')] = 'stream-json'
             argv.append('--verbose')
             print('Starting ' + trial['trial_id'] + ' (new session)', flush=True)
-            run = run_process(argv, root / 'worktree', env, 600, record['task']['prompt'])
+            run = run_process(argv, root / 'worktree', env, 600, prompt)
             (root / 'agent.stream.jsonl').write_bytes(run['stdout'].encode('utf-8'))
             (root / 'agent.stderr.txt').write_bytes(run['stderr'].encode('utf-8'))
             response, tools, error = {}, {'tool_calls': None, 'bash_calls': None}, None
@@ -421,8 +432,18 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
             patch, check = candidate_patch(folder, record, root / 'worktree')
             grade = evaluate(folder, plan, row, patch, root / 'evaluation')
             with audit_scope(root / 'tg-data'):
-                stats = audit.summary(trial['session_id'], record['experiment_id'])
+                stats = audit.summary(trial['session_id'], record['experiment_id'], source='claude_hook')
+                seed_stats = audit.summary(trial['session_id'], record['experiment_id'], source='manual')
+                audit_rows, _ = audit.events()
                 diagnostics = audit.diagnostics(trial['session_id'], record['experiment_id'], limit=100)
+            final_source = (fingerprint(root / 'worktree', record['task']['editable_files'])
+                            if check['only_allowed_changes'] else None)
+            observed = evidence([json.loads(line) for line in run['stdout'].splitlines() if line.strip()]
+                                if error is None else [], audit_rows, root / 'test-receipts',
+                                session=trial['session_id'], experiment=record['experiment_id'],
+                                initial_source=plan['initial_source_sha256'], final_source=final_source,
+                                required_command=plan['required_command'], image_id=plan['image_id'],
+                                expected_tests=plan['visible_expected_tests'])
             citations = [r for r in stats['records'] if r['artifact_id'] in str(response.get('result', '')) and
                          r['compression_id'] in str(response.get('result', ''))]
             host_usage = response.get('usage', {})
@@ -436,6 +457,9 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
                       'agent_elapsed_ms': run['elapsed_ms'], 'agent_exit_code': run['exit_code'],
                       'timed_out': run['timed_out'], 'outputs_truncated': run['outputs_truncated'],
                       'execution_error': error, **tools,
+                      'protocol': plan.get('protocol', 'agent_driven'), 'protocol_evidence': observed,
+                      'seed_delivery': seed_delivery,
+                      'seed_compression': {k: v for k, v in seed_stats.items() if k != 'records'},
                       'bash_hook_invocations': diagnostics['matching_invocations'],
                       'hook_statuses': [d['status'] for d in diagnostics['invocations']],
                       'compression': {k: v for k, v in stats.items() if k != 'records'},
@@ -465,19 +489,25 @@ def report_quality(folder: Path) -> dict:
         arms[arm] = {'planned': len(own), 'completed': sum(not r.get('not_run') for r in own),
                      'successful': sum(r['task_success'] for r in own),
                      'compressions': sum(r.get('compression', {}).get('compressions', 0) for r in own),
+                     'manual_seed_compressions': sum(r.get('seed_compression', {}).get('compressions', 0) for r in own),
+                     'seed_recoveries': sum(r.get('seed_compression', {}).get('recovery_count', 0) for r in own),
                      'recoveries': sum(r.get('compression', {}).get('recovery_count', 0) for r in own),
                      'metadata_citations': sum(r.get('model_cited_matching_metadata_count', 0) for r in own)}
     paired = []
     for pair in sorted({r['pair_id'] for r in rows}):
         group = {r['arm']: r for r in rows if r['pair_id'] == pair}
         b, o = group['baseline'], group['optimized']
-        exposure = o.get('compression', {}).get('compressions', 0) > 0
+        assessment = pair_assessment(b, o, plan.get('protocol', 'agent_driven'))
+        exposure = assessment['compression_exposed']
         paired.append({'pair_id': pair, 'baseline_success': b['task_success'], 'optimized_success': o['task_success'],
+                       **assessment,
+                       'compression_observed_in_audit': o.get('compression', {}).get('compressions', 0) > 0,
                        'compression_exposed': exposure,
-                       'observed_quality_drop': not o['task_success'] if exposure and b['task_success'] and
+                       'observed_quality_drop': not o['task_success'] if assessment['comparison_evidence_satisfied'] and b['task_success'] and
                        not b.get('not_run') and not o.get('not_run') else 'not_evaluable'})
     report = {'schema': 'tokenguard.swebench-quality-report/v1', 'instance_id': INSTANCE,
               'difficulty': '15 min - 1 hour', 'requested_model': record['task']['model'],
+              'protocol': plan.get('protocol', 'agent_driven'),
               'scope': plan['scope'], 'arms': arms, 'pairs': paired, 'runs': rows,
               'actual_provider_usage': 'unavailable', 'actual_billed_cost': 'unavailable',
               'general_no_quality_loss_claim': 'not_established; one task and small repeated sample',
@@ -489,10 +519,11 @@ def report_quality(folder: Path) -> dict:
                               'CLI aggregate usage is not independently verified provider usage or billing']}
     write_json(folder / 'quality-report.json', report)
     fields = ['trial_id', 'arm', 'task_success', 'f2p_passed', 'p2p_passed', 'agent_elapsed_ms',
-              'tool_calls', 'compressions', 'recovery_count', 'metadata_citations']
+              'tool_calls', 'compressions', 'recovery_count', 'metadata_citations',
+              'test_protocol_satisfied', 'final_test_command_observed', 'seed_compressions', 'seed_recoveries']
     lines = ['# SWE-bench quality pilot', '', INSTANCE + '; ' + plan['scope'], '',
-             '| Trial | Success | F2P / 4 | P2P / 171 | Compressions | Recoveries | Metadata citations |',
-             '| --- | --- | ---: | ---: | ---: | ---: | ---: |']
+             '| Trial | Success | F2P / 4 | P2P / 171 | Native compressions | Native recoveries | Seed compressions | Seed recoveries |',
+             '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
     with (folder / 'quality-report.csv').open('w', encoding='utf-8', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -500,11 +531,22 @@ def report_quality(folder: Path) -> dict:
             statuses = row.get('grade', {}).get('tests_status', {})
             flat = {**row, 'f2p_passed': len(statuses.get('FAIL_TO_PASS', {}).get('success', [])),
                     'p2p_passed': len(statuses.get('PASS_TO_PASS', {}).get('success', [])),
-                    **row.get('compression', {}), 'metadata_citations': row.get('model_cited_matching_metadata_count', 0)}
+                    **row.get('compression', {}), 'metadata_citations': row.get('model_cited_matching_metadata_count', 0),
+                    'test_protocol_satisfied': row.get('protocol_evidence', {}).get('agent_test_protocol_satisfied', 'unavailable'),
+                    'final_test_command_observed': row.get('protocol_evidence', {}).get('final_test_command_observed', 'unavailable'),
+                    'seed_compressions': row.get('seed_compression', {}).get('compressions', 0),
+                    'seed_recoveries': row.get('seed_compression', {}).get('recovery_count', 0)}
             writer.writerow({k: flat.get(k, 'unavailable') for k in fields})
             lines.append(f"| {row['trial_id']} | {row['task_success']} | {flat['f2p_passed']} | {flat['p2p_passed']} | "
-                         f"{flat.get('compressions', 'unavailable')} | {flat.get('recovery_count', 'unavailable')} | {flat['metadata_citations']} |")
+                         f"{flat.get('compressions', 'unavailable')} | {flat.get('recovery_count', 'unavailable')} | "
+                         f"{flat['seed_compressions']} | {flat['seed_recoveries']} |")
+    lines += ['', '| Pair | Evidence satisfied | Exposed | Missing evidence |', '| --- | --- | --- | --- |']
+    for pair in paired:
+        lines.append(f"| {pair['pair_id']} | {pair['comparison_evidence_satisfied']} | {pair['compression_exposed']} | "
+                     + ', '.join(pair['reasons']) + ' |')
     lines += ['', 'Unrun cases remain in the report and are not silently excluded.',
+              'Protocol: ' + plan.get('protocol', 'agent_driven') + '.',
+              'Native Hook compression and controller-seeded prompt compression are counted separately.',
               'No-compression trials do not measure the effect of compression on coding ability.',
               'Provider usage/billed cost unavailable. CLI aggregates are unverified and reported separately.',
               'One repeated task does not establish general non-inferiority.', '']

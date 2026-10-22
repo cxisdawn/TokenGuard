@@ -6,6 +6,10 @@ import csv
 import json
 from pathlib import Path
 import re
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tokenguard.quality_protocol import pair_assessment
 
 
 def read_rows(path: Path) -> list[dict]:
@@ -20,6 +24,7 @@ def analyze(folder: Path) -> dict:
     record = json.loads((folder / 'experiment.json').read_text(encoding='utf-8'))
     plan = json.loads((folder / 'quality-plan.json').read_text(encoding='utf-8'))
     runs = []
+    pair_rows = []
     for trial in record['trials']:
         if not re.fullmatch(r'[0-9]{3}-(baseline|optimized)', trial['trial_id']):
             raise ValueError('Invalid trial name')
@@ -27,10 +32,12 @@ def analyze(folder: Path) -> dict:
         result_path = root / 'quality-result.json'
         if not result_path.exists():
             runs.append({**trial, 'state': 'not_run'})
+            pair_rows.append({**trial, 'not_run': True})
             continue
         row = json.loads(result_path.read_text(encoding='utf-8'))
         if any(row.get(k) != trial[k] for k in ('trial_id', 'pair_id', 'arm', 'session_id')):
             raise ValueError('Trial identity differs')
+        pair_rows.append(row)
         events = read_rows(root / 'agent.stream.jsonl')
         finals = [e for e in events if e.get('type') == 'result']
         final = finals[0] if len(finals) == 1 and finals[0].get('session_id') == trial['session_id'] else {}
@@ -72,6 +79,11 @@ def analyze(folder: Path) -> dict:
                      'saved_stdout_chars': row['compression']['saved_chars'],
                      'changed_files': row['source_changes']['changed_files'],
                      'only_allowed_changes': row['source_changes']['only_allowed_changes'],
+                     'test_protocol_satisfied': row.get('protocol_evidence', {}).get('agent_test_protocol_satisfied', 'unavailable'),
+                     'native_compressions_in_matching_bash_results': row.get('protocol_evidence', {}).get(
+                         'native_compressions_in_matching_bash_results', 'unavailable'),
+                     'seed_compressions': row.get('seed_compression', {}).get('compressions', 0),
+                     'seed_recoveries': row.get('seed_compression', {}).get('recovery_count', 0),
                      'cli_aggregate_usage_unverified': row['cli_aggregate_usage_unverified']})
     summary = {}
     for arm in ('baseline', 'optimized'):
@@ -84,10 +96,19 @@ def analyze(folder: Path) -> dict:
                         'compressions': sum(r['compressions'] for r in done),
                         'host_transcript_compressed_messages': sum(r['compressed_messages_in_host_transcript'] for r in done),
                         'recoveries': sum(r['recovery_count'] for r in done)}
+    pairs = []
+    for pair in sorted({r['pair_id'] for r in pair_rows}):
+        group = {r['arm']: r for r in pair_rows if r['pair_id'] == pair}
+        pairs.append({'pair_id': pair, **pair_assessment(group.get('baseline', {'not_run': True}),
+                     group.get('optimized', {'not_run': True}), plan.get('protocol', 'agent_driven'))})
     conclusion = 'insufficient_evidence'
     if all(summary[a]['completed'] == summary[a]['planned'] for a in summary):
-        if summary['optimized']['compressions'] == 0:
+        if plan.get('protocol') == 'controlled_initial_log' and not all(p['comparison_evidence_satisfied'] for p in pairs):
+            conclusion = 'controlled_protocol_evidence_incomplete'
+        elif plan.get('protocol') != 'controlled_initial_log' and summary['optimized']['compressions'] == 0:
             conclusion = 'compression_not_exercised'
+        elif not all(p['comparison_evidence_satisfied'] for p in pairs):
+            conclusion = 'test_or_visibility_evidence_incomplete; historical_runs_not_retroactively_certified'
         elif all(summary[a]['code_resolved'] == summary[a]['planned'] for a in summary):
             conclusion = 'all_observed_patches_resolved; general_non_inferiority_not_established'
         elif all(summary[a]['code_resolved'] == 0 for a in summary):
@@ -96,6 +117,7 @@ def analyze(folder: Path) -> dict:
             conclusion = 'mixed_outcomes; inspect_each_pair_and_budget_before_causal_attribution'
     result = {'schema': 'tokenguard.quality-analysis/v1', 'experiment_id': record['experiment_id'],
               'instance_id': plan['instance_id'], 'summary': summary, 'runs': runs,
+              'protocol': plan.get('protocol', 'agent_driven'), 'pairs': pairs,
               'interpretation': conclusion, 'model_api_calls_from_analysis': 0,
               'actual_provider_usage': 'unavailable', 'actual_billed_cost': 'unavailable',
               'limits': [f"single public task, {len({r['pair_id'] for r in runs})} paired rounds, no general non-inferiority proof",
@@ -106,7 +128,8 @@ def analyze(folder: Path) -> dict:
     (folder / 'quality-analysis.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     fields = ['trial_id', 'arm', 'state', 'code_resolved', 'task_completed_and_valid', 'agent_end_reason',
               'f2p_success', 'p2p_success', 'agent_elapsed_ms', 'tool_calls', 'compressions',
-              'compressed_messages_in_host_transcript', 'recovery_count']
+              'compressed_messages_in_host_transcript', 'recovery_count', 'test_protocol_satisfied',
+              'native_compressions_in_matching_bash_results', 'seed_compressions', 'seed_recoveries']
     with (folder / 'quality-analysis.csv').open('w', encoding='utf-8', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -119,6 +142,12 @@ def analyze(folder: Path) -> dict:
         lines.append('| ' + ' | '.join(str(run.get(k, 'unavailable')) for k in
                      ('trial_id', 'code_resolved', 'task_completed_and_valid', 'agent_end_reason',
                       'f2p_success', 'p2p_success', 'compressions', 'compressed_messages_in_host_transcript')) + ' |')
+    lines += ['', 'Protocol: ' + plan.get('protocol', 'agent_driven'), '',
+              'Pair evidence (all planned pairs, including failures):', '',
+              '| Pair | Evidence satisfied | Exposed | Missing evidence |', '| --- | --- | --- | --- |']
+    for pair in pairs:
+        lines.append(f"| {pair['pair_id']} | {pair['comparison_evidence_satisfied']} | {pair['compression_exposed']} | "
+                     + ', '.join(pair['reasons']) + ' |')
     lines += ['', 'Interpretation: ' + conclusion, '',
               'Task-specific raw CLI aggregates (UNVERIFIED; not an API/billing savings calculation):', '',
               '| Trial | CLI input | CLI cache read | CLI cache creation | CLI output |',

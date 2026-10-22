@@ -54,7 +54,7 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-本地当前版本回归为 164 项通过、1 项因 Windows 符号链接权限跳过；历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过。另有 13 个本地例子验证真实 pytest 输出、失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准。
+本地当前版本回归为 181 项通过、1 项因 Windows 符号链接权限跳过，另有 74 个 subtests 通过；历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过。另有 13 个本地例子验证真实 pytest 输出、失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
@@ -66,11 +66,14 @@ $Project = 'C:\work\my-project'
 
 **字符下降、本地估算 Token 下降、整个任务实际 Token 与费用下降是不同指标。** 尚无完整真实 A/B usage/账单，因此没有稳定费用节省率结论。所有示例 usage 和费用 Fixture 均为 synthetic，不能用于宣传真实收益。
 
+现已加入测试执行凭证及显式受控初始日志协议：关联实际测试、源码 Hash 和 Bash 响应，缺少执行／暴露证据时不报告质量比较成立。`benchmark/protocol_demo.py` 以真实本地 pytest、Hook 和恢复验证流程，固定修改和工具消息为 Mock，模型调用为 0。另已通过 Pylint 原始／gold 本地预检，不追加付费会话；详见[执行证据与协议](tokenguard_v04/QUALITY_PROTOCOL.md)。
+
 ## 文档
 
 - [v0.4 接入与恢复说明](tokenguard_v04/README.md)
 - [13 个可重复的本地验证例子](tokenguard_v04/EXAMPLES.md)
 - [SWE-bench 单任务质量对照](tokenguard_v04/SWE_BENCH_QUALITY.md)
+- [测试执行凭证与受控初始日志](tokenguard_v04/QUALITY_PROTOCOL.md)
 - [离线 usage 与账单配对](tokenguard_v04/USAGE.md)
 - [任务级 A/B 执行、独立验收与付费调用边界](tokenguard_v04/TASK_EXPERIMENTS.md)
 - [v0.3 审查要点](tokenguard_v04/AUDIT_V03.md)

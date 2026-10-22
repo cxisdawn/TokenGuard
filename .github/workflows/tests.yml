@@ -33,6 +33,9 @@ jobs:
       - name: Offline usage report demonstration
         working-directory: tokenguard_v04
         run: python benchmark/usage_demo.py
+      - name: Offline test receipts and controlled log protocol
+        working-directory: tokenguard_v04
+        run: python benchmark/protocol_demo.py
       - name: Historical v0.1 tests
         working-directory: tokenguard_v01
         run: python -m unittest discover -s tests -v

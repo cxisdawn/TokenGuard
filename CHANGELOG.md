@@ -2,6 +2,11 @@
 
 ## v0.4
 
+- Actual visible-test receipts bind source/log hashes, exit status, complete test counts and matching Bash responses; command mentions alone do not count.
+- Separate agent-driven/native Hook and opt-in controller-seeded initial-log protocols, with explicit per-pair missing-evidence reasons.
+- Hash-bound preflight/input verification, byte-identical initial artifacts, and separately attributed manual/native compression and recovery counts.
+- Zero-model-call protocol demo using real local pytest and Hook processes with disclosed deterministic mock edits/transcripts.
+
 - Opt-in SWE-bench Verified Pylint quality pilot using official test metrics and independently graded candidates.
 - Three authorized real A/B rounds retained including all max-turn exits; patch correctness and agent completion are reported separately.
 - Compression exposure and exact host-transcript metadata matches, with unverified CLI usage separated from provider billing.

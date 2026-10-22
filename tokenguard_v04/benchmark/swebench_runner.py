@@ -21,6 +21,7 @@ def main() -> int:
     prep.add_argument('--model', default='deepseek-flash')
     prep.add_argument('--compat-wheel', type=Path)
     prep.add_argument('--max-turns', type=int, default=20)
+    prep.add_argument('--protocol', choices=['agent_driven', 'controlled_initial_log'], default='agent_driven')
     for mode in ('preflight', 'run', 'report'):
         command = sub.add_parser(mode)
         command.add_argument('experiment', type=Path)
@@ -38,7 +39,7 @@ def main() -> int:
         return 0
     if args.action == 'prepare':
         print(prepare_quality(args.instance, args.harness, args.output, args.rounds, args.model,
-                              args.compat_wheel, args.max_turns))
+                              args.compat_wheel, args.max_turns, args.protocol))
         return 0
     if args.action == 'grade':
         result = grade_log(args.instance, args.harness, args.log)

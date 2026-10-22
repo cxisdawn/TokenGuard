@@ -1,6 +1,10 @@
 # 验证范围
 
-当前版本在 Windows、Python 3.11 上完成 **164 passed、1 skipped、63 subtests passed**。跳过项为 Windows 符号链接权限不可用。历史版本独立测试：v0.1 4 项、v0.2 6 项、v0.3 14 项通过。
+当前版本在 Windows、Python 3.11 上完成 **181 passed、1 skipped、74 subtests passed**。跳过项为 Windows 符号链接权限不可用。历史版本独立测试：v0.1 4 项、v0.2 6 项、v0.3 14 项通过。
+
+新增 [执行凭证与受控初始日志](../tokenguard_v04/QUALITY_PROTOCOL.md) 的 17 项离线回归，覆盖源码／日志 Hash、测试数量、超时／截断、跨会话／镜像、命令与响应身份、路径链接、预检篡改，以及手动／原生压缩和恢复的分离。真实本地演示运行 3 次 504 项 pytest：初始 3 失败，固定修改后两组均通过；优化初始日志手动压缩 1 次、选择性恢复 1 次，原生 Hook 压缩 0 次。修改决策和工具消息为 Mock，不是新的真实模型能力样本。
+
+此次受控协议还在现有固定 Pylint 镜像中做了真实本地预检：原始 F2P 0/4、P2P 171/171，gold F2P 4/4、P2P 171/171；可见测试 168 passed、1 xfailed（169 项），凭证及源码／日志校验通过。相同初始 stdout 16661 字符，基线原文交付，优化手动处理为 1769 字符（含恢复元数据）；stderr 和退出码保留。未启动新 Claude 会话；这些数字仅表示该本地日志的字符处理，不是实际 Token／费用节省。
 
 新增 [SWE-bench Verified 单任务质量对照](../tokenguard_v04/SWE_BENCH_QUALITY.md)：使用公开 Pylint 递归忽略规则任务、官方测试脚本及评分源码，原始 4 个 F2P 失败、gold 全部通过，171 个 P2P 维持。环境以官方镜像为基础固定到任务 base commit，并显式固定 tomlkit 兼容版本；完整偏差见实验文档。三轮真实 A/B 的候选代码 resolved 为基线 0/3、优化 1/3；六次均 error_max_turns，正常完成率均为 0/3。优化压缩 3 次，宿主工具记录中有 3 次精确元数据匹配；没有把共同失败解释成无损。
 

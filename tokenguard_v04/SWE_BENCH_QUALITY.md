@@ -1,5 +1,7 @@
 # 用公开任务评估压缩是否影响代码能力
 
+后续执行证据与显式受控日志协议见 [QUALITY_PROTOCOL.md](QUALITY_PROTOCOL.md)。旧实验继续按原有协议和预算报告，不追补为新凭证验证成功。新准备默认 `agent_driven`，可显式选择 `--protocol controlled_initial_log`，两种模式分别比较。
+
 此前的日志案例只证明固定输入能压缩和恢复；除法 Fixture 也不足以代表中等复杂工程任务。这里使用公开 SWE-bench Verified 的一个真实任务，重复比较相同模型在 no_hook / TokenGuard 两组的修复质量。
 
 ## 任务和指标

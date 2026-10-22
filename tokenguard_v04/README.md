@@ -93,4 +93,6 @@ examples 实际运行同一项目修复前后的 504 项 pytest，另验证混�
 
 ## 开发测试
 
+测试执行凭证与可选 `controlled_initial_log` 协议见 [QUALITY_PROTOCOL.md](QUALITY_PROTOCOL.md)。原生 Hook 暴露与控制器预处理分别计数；不完整测试、无实际压缩或审计／响应不匹配会使比较证据不满足。运行 `python -X utf8 benchmark/protocol_demo.py` 可验证真实本地测试与恢复链路；固定修改及工具消息明确为 Mock，模型调用为 0。
+
 在本版本目录执行 `python -m pytest -q` 或 `python -m unittest discover -s tests -v`。手动协议验证为 `python verify_hook.py`。这几类验证与真实 Claude 会话、提供商 usage 和账单证据分开记录。

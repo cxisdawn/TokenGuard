@@ -67,6 +67,7 @@ def _handle(event: Any) -> tuple[dict | None, str]:
     save_original(original)
     source = os.environ.get('TOKENGUARD_SOURCE', 'unverified_hook')
     append({'event': 'compression', 'session_id': event.get('session_id'), 'source': source,
+            'tool_use_id': event.get('tool_use_id'),
             'experiment_id': os.environ.get('TOKENGUARD_EXPERIMENT_ID'), 'tool_name': 'Bash',
             'origin_verification': 'self_reported; no live transcript validation',
             'command_type': command_type(command), 'strategy': strategy, 'artifact_id': identifier,
