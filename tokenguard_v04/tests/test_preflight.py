@@ -135,6 +135,14 @@ class TaskPreflight(unittest.TestCase):
         self.assertFalse((self.folder/'started.json').exists())
         self.assertFalse((self.folder/'execution.lock').exists())
 
+    def test_no_hook_baseline_still_probes_optimized_hook_without_model_calls(self):
+        folder=exp.prepare(exp.BASE/'benchmark'/'fixture',exp.BASE/'benchmark'/'task_fixture.json',self.root,1,'no_hook')
+        result=probe.check(folder)
+        self.assertTrue(result['local_checks_passed'])
+        self.assertEqual(result['baseline_mode'],'no_hook')
+        self.assertIn('optimized arm',result['hook_probe_scope'])
+        self.assertEqual(result['model_api_calls_started_by_runner'],0)
+
 
 if __name__=='__main__':
     unittest.main()

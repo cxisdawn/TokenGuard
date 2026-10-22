@@ -11,6 +11,7 @@ import uuid
 from . import audit, usage
 from .claude_runtime import resolve_claude
 from .experiment_snapshot import changes, digest, read_spec, snapshot, write_snapshot
+from .experiment_modes import BASELINE_MODES,baseline_mode,hook_mode,settings_path
 from .experiment_validation import run_process, validate
 
 SCHEMA='tokenguard.task-experiment/v1'
@@ -33,9 +34,12 @@ def locked(folder: Path):
         path.unlink()
 
 
-def prepare(project: Path, spec_path: Path, output: Path, rounds: int = 1) -> Path:
+def prepare(project: Path, spec_path: Path, output: Path, rounds: int = 1,
+            baseline: str = 'disabled_hook') -> Path:
     if type(rounds) is not int or not 1<=rounds<=20:
         raise ValueError('rounds must be 1..20')
+    if baseline not in BASELINE_MODES:
+        raise ValueError('Unknown baseline mode')
     spec=read_spec(usage.load(spec_path))
     project=project.resolve()
     payload,hashes=snapshot(project,spec['files'])
@@ -45,18 +49,21 @@ def prepare(project: Path, spec_path: Path, output: Path, rounds: int = 1) -> Pa
     folder.mkdir(parents=True,exist_ok=False)
     write_snapshot(folder/'snapshot',payload)
     write_json(folder/'task.json',spec)
-    # Identical explicit hook configuration in both arms, outside candidate code.
+    # Intervention settings stay outside candidate code; permissions are untouched.
     import installer
     settings=installer.install(folder/'control',Path(sys.executable))
     settings_copy=folder/'settings.json'
     settings_copy.write_bytes(settings.read_bytes())
+    write_json(folder/'no-hook-settings.json',{})
     write_json(folder/'mcp.json',{'mcpServers':{}})
     tool_hashes={str(p.relative_to(BASE)):hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in sorted((BASE/'tokenguard').glob('*.py'))}
     config={'max_turns':spec['max_turns'],'timeout_seconds':spec['timeout_seconds'],
+            'baseline_mode':baseline,
             'task_spec_sha256':digest(spec),
             'python':sys.version,'tools_sha256':digest(tool_hashes),
             'settings_sha256':hashlib.sha256(settings_copy.read_bytes()).hexdigest(),
+            'no_hook_settings_sha256':hashlib.sha256((folder/'no-hook-settings.json').read_bytes()).hexdigest(),
             'mcp_sha256':hashlib.sha256((folder/'mcp.json').read_bytes()).hexdigest(),
             'setting_sources':'user','strict_mcp_config':True}
     trials=[]
@@ -88,6 +95,12 @@ def load_experiment(folder: Path) -> dict:
     if hashlib.sha256(spec['prompt'].encode()).hexdigest()!=record['prompt_sha256']:
         raise ValueError('Prompt changed')
     config=record['config']
+    mode=baseline_mode(config)
+    if mode=='no_hook' or 'no_hook_settings_sha256' in config:
+        if hashlib.sha256((folder/'no-hook-settings.json').read_bytes()).hexdigest()!=config.get('no_hook_settings_sha256'):
+            raise ValueError('No-hook settings changed')
+        if usage.load(folder/'no-hook-settings.json')!={}:
+            raise ValueError('No-hook settings must be an empty intervention')
     if digest(spec)!=config['task_spec_sha256']:
         raise ValueError('Task criteria changed')
     for name,field in [('settings.json','settings_sha256'),('mcp.json','mcp_sha256')]:
@@ -120,12 +133,12 @@ def load_experiment(folder: Path) -> dict:
 def command(folder: Path, record: dict, trial: dict, driver: str, executable: str) -> list[str]:
     if driver=='mock':
         return [sys.executable,str(BASE/'tokenguard'/'experiment_mock.py'),str(folder/'task.json'),
-                trial['session_id'],str(folder/'trials'/trial['trial_id']/'driver')]
+                trial['session_id'],str(folder/'trials'/trial['trial_id']/'driver'),hook_mode(record,trial)]
     if driver!='claude':
         raise ValueError('Unknown driver')
     return [executable,'--print','--output-format','json','--session-id',trial['session_id'],
             '--model',record['task']['model'],'--max-turns',str(record['task']['max_turns']),
-            '--setting-sources',record['config']['setting_sources'],'--settings',str(folder/'settings.json'),
+            '--setting-sources',record['config']['setting_sources'],'--settings',str(settings_path(folder,record,trial)),
             '--strict-mcp-config','--mcp-config',str(folder/'mcp.json')]
 
 
@@ -145,6 +158,8 @@ def execute(folder: Path, driver: str = 'mock', execute_run: bool = False,
     folder=folder.resolve()
     record=load_experiment(folder)
     plan={'dry_run':not execute_run,'driver':driver,'sessions':len(record['trials']),
+          'baseline_mode':baseline_mode(record['config']),
+          'trial_hook_modes':{t['trial_id']:hook_mode(record,t) for t in record['trials']},
           'paid_sessions':len(record['trials']) if driver=='claude' else 0,
           'commands':[command(folder,record,t,driver,executable) for t in record['trials']],
           'usage':'unavailable until explicitly imported; mock does not simulate tokens',
@@ -167,7 +182,7 @@ def execute(folder: Path, driver: str = 'mock', execute_run: bool = False,
     with locked(folder):
         if (folder/'started.json').exists():
             raise ValueError('Experiment already started')
-        agent_version='tokenguard-fixture-agent/1'
+        agent_version='tokenguard-fixture-agent/2'
         if driver=='claude':
             executable=resolve_claude(executable)['executable']
             version=run_process([executable,'--version'],folder,dict(os.environ),15)
@@ -215,6 +230,23 @@ def _run_trial(folder: Path, record: dict, trial: dict, driver: str, executable:
         error='initial_validation_failed'
     for stream in ('stdout','stderr'):
         (root/'driver'/('agent.'+stream+'.txt')).write_text(result[stream],encoding='utf-8')
+    metrics={k:'unavailable' for k in ('hook_process_count','hook_process_elapsed_ms','hook_errors',
+                                      'original_stdout_chars','visible_stdout_chars')}
+    if driver=='mock' and result['exit_code']==0 and error is None:
+        try:
+            measured=usage.load(root/'driver'/'worker-metrics.json')
+            if measured.get('session_id')!=trial['session_id'] or measured.get('hook_mode')!=hook_mode(record,trial):
+                raise ValueError('Mock metric identity differs')
+            for key in metrics:
+                if type(measured.get(key)) is not int or not 0<=measured[key]<=2**63-1:
+                    raise ValueError('Invalid mock measurement')
+            if measured['hook_process_count']!=(0 if hook_mode(record,trial)=='no_hook' else 2):
+                raise ValueError('Unexpected mock Hook count')
+            if hook_mode(record,trial)=='no_hook' and (measured['hook_process_elapsed_ms'] or measured['hook_errors']):
+                raise ValueError('No-hook mode reported Hook work')
+            metrics={key:measured[key] for key in metrics}
+        except (OSError,ValueError,TypeError,AttributeError):
+            error='invalid_mock_metrics'
     check=changes(root/'worktree',record['files_sha256'],spec['editable_files'])
     after=validate(folder/'snapshot',root/'worktree',spec,root/'final-validation')
     success=(baseline_ok and result['exit_code']==0 and not result['timed_out'] and error is None
@@ -223,6 +255,7 @@ def _run_trial(folder: Path, record: dict, trial: dict, driver: str, executable:
         stats=audit.summary(trial['session_id'],record['experiment_id'])
         diagnostics=audit.diagnostics(trial['session_id'],record['experiment_id'],limit=100)
     row={**trial,'driver':driver,'agent_version':version,'fresh_session':True,
+         'baseline_mode':baseline_mode(record['config']),'hook_mode':hook_mode(record,trial),**metrics,
          'task_success':success,'tests_passed':after['passed'],
          'tests_unchanged':not check['protected_files_changed'],
          'initial_validation':before,'final_validation':after,'source_changes':check,
@@ -254,6 +287,7 @@ def attach_usage(folder: Path, trial_id: str, source: Path, format_name: str, ev
         manifest.update({key:result[key] for key in ('arm','pair_id','session_id','agent_version','fresh_session',
                                                     'task_success','tests_passed','tests_unchanged','tool_calls','elapsed_ms')})
         manifest.update(schema_version=1,task_id=record['task']['task_id'],provider=record['task']['provider'],
+                        baseline_mode=baseline_mode(record['config']),
                         model=record['task']['model'],evidence_kind=evidence,coverage=coverage,
                         expected_request_count=request_count,recovery_count=result['compression']['recovery_count'])
         write_json(root/'usage-manifest.json',manifest)

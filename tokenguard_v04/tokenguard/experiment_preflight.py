@@ -11,6 +11,7 @@ from . import audit,doctor
 from .claude_runtime import ClaudeExecutableError,resolve_claude
 from .experiment import audit_scope,load_experiment,write_json
 from .experiment_snapshot import changes,digest
+from .experiment_modes import baseline_mode
 from .experiment_validation import run_process,validate
 
 REQUIRED_FLAGS=('--print','--output-format','--session-id','--model','--setting-sources',
@@ -25,6 +26,8 @@ def check(folder: Path, executable: str = 'claude') -> dict:
             'prepared_sessions':len(record['trials']),'model_api_calls_started_by_runner':0,
             'local_checks_passed':False,'checks':{},'cli':{},
             'requested_model':record['task']['model'],
+            'baseline_mode':baseline_mode(record['config']),
+            'hook_probe_scope':'optimized arm; baseline may omit runner-injected Hook',
             'authentication':'unverified; no credentials inspected',
             'provider_routing':'unverified; no model request sent',
             'host_replacement_acceptance':'unverified; standalone Hook subprocess only',

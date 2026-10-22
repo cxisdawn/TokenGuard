@@ -41,11 +41,12 @@ $Python = 'C:\src\TokenGuard\.venv\Scripts\python.exe'
 |schema_version|整数 1|
 |experiment_id / task_id / pair_id|实验、任务及配对轮次；同一 pair 恰好两个 arm|
 |arm|baseline 或 optimized|
+|baseline_mode|disabled_hook 或 no_hook；通用旧导出缺失时为 unspecified。两组必须一致，不同模式分别汇总|
 |session_id|每个 arm 独立、全新会话 ID|
 |provider / model / agent_version|实际提供商、模型与 Agent 版本|
 |prompt_sha256|同一任务 Prompt 的 SHA256|
 |initial_snapshot_sha256|同一初始项目快照的 SHA256|
-|config_sha256|共享模型/运行配置的 SHA256，不含本实验唯一变量 TokenGuard 开关；不要把密钥纳入导出配置|
+|config_sha256|共享实验设计/运行配置的 SHA256；可包含基线模式及两组干预配置文件哈希，同一配对必须一致。不要把密钥纳入配置导出|
 |fresh_session|是否确认为全新会话，不可用 resume 冒充|
 |task_success / tests_passed / tests_unchanged|最终代码与测试独立验收结果；任何一项失败都不纳入成功节省汇总|
 |coverage|complete_task 或 partial|

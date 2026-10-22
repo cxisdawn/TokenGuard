@@ -51,7 +51,9 @@ def validate(snapshot_dir: Path, candidate: Path, spec: dict, output: Path) -> d
             return {'passed':False,'exit_code':None,'reason':'editable_source_missing_or_unsafe','tests':0}
     env=dict(os.environ)
     env.update({'PYTHONDONTWRITEBYTECODE':'1','PYTEST_DISABLE_PLUGIN_AUTOLOAD':'1'})
-    with tempfile.TemporaryDirectory(prefix='tg-validation-',dir=output) as temporary:
+    # A short OS temporary path avoids MAX_PATH failures in nested Windows reports.
+    # Only logs are retained in output; original/candidate directories stay untouched.
+    with tempfile.TemporaryDirectory(prefix='tg-validation-') as temporary:
         root=Path(temporary)
         project=root/'worktree';write_snapshot(project,payload)
         xml=root/'pytest.xml'

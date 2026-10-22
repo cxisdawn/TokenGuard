@@ -2,6 +2,9 @@
 
 ## v0.4
 
+- Explicit disabled-hook and no-hook baselines with separate usage cohorts and backwards-compatible task records.
+- Measured local Hook process counts/time, stdout sizes and repeated offline baseline study reports.
+- Short validation temporary paths and flatter study output for Windows path limits.
 - Local-only task preflight with help/version checks, owned Hook probes and expected initial-test validation.
 - Direct native binary discovery beside Windows npm Claude shims; launcher/version failures leave sessions unused.
 - Paired project task runner with explicit snapshots, fresh sessions, AB/BA rounds, dry-run defaults and paid-session gates.

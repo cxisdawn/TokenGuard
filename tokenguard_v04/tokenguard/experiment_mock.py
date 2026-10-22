@@ -2,7 +2,6 @@
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 
 if __package__ in (None, ''):
@@ -17,6 +16,11 @@ def main() -> None:
     session=sys.argv[2]
     hook=Path(__file__).resolve().with_name('hook.py')
     output=Path(sys.argv[3])
+    mode=sys.argv[4]
+    if mode not in ('enabled_hook','disabled_hook','no_hook'):
+        raise ValueError('Unknown mock Hook mode')
+    metrics={'session_id':session,'hook_mode':mode,'hook_process_count':0,'hook_process_elapsed_ms':0,
+             'hook_errors':0,'original_stdout_chars':0,'visible_stdout_chars':0}
     env=dict(os.environ)
     env.update({'PYTHONDONTWRITEBYTECODE':'1','PYTEST_DISABLE_PLUGIN_AUTOLOAD':'1'})
     for step in ('before','after'):
@@ -26,11 +30,22 @@ def main() -> None:
                'tool_use_id':step,'tool_input':{'command':'python -m pytest -v'},
                'tool_response':{'stdout':result['stdout'],'stderr':result['stderr'],
                                 'exitCode':result['exit_code'],'interrupted':result['timed_out']}}
-        adapted=subprocess.run([sys.executable,str(hook),'--source','mock'],input=json.dumps(event),
-                               capture_output=True,text=True,encoding='utf-8',env=env,timeout=15)
         visible=result['stdout']
-        if adapted.returncode==0 and adapted.stdout.strip():
-            visible=json.loads(adapted.stdout)['hookSpecificOutput']['updatedToolOutput']['stdout']
+        if mode!='no_hook':
+            adapted=run_process([sys.executable,str(hook),'--source','mock'],Path.cwd(),env,15,json.dumps(event))
+            metrics['hook_process_count']+=1
+            metrics['hook_process_elapsed_ms']+=adapted['elapsed_ms']
+            if adapted['exit_code']!=0 or adapted['timed_out'] or adapted['outputs_truncated']:
+                metrics['hook_errors']+=1
+            elif adapted['stdout'].strip():
+                try:
+                    replacement=json.loads(adapted['stdout'])['hookSpecificOutput']['updatedToolOutput']['stdout']
+                    if not isinstance(replacement,str):raise ValueError('Invalid replacement')
+                    visible=replacement
+                except (ValueError,KeyError,TypeError):
+                    metrics['hook_errors']+=1
+        metrics['original_stdout_chars']+=len(result['stdout'])
+        metrics['visible_stdout_chars']+=len(visible)
         (output/(step+'.visible.txt')).write_text(visible,encoding='utf-8')
         (output/(step+'.stderr.txt')).write_text(result['stderr'],encoding='utf-8')
         if result['timed_out'] or result['outputs_truncated']:
@@ -42,8 +57,9 @@ def main() -> None:
                 if content.count(edit['old'])!=1:
                     raise ValueError('Mock edit must match exactly once')
                 path.write_text(content.replace(edit['old'],edit['new'],1),encoding='utf-8')
+    (output/'worker-metrics.json').write_text(json.dumps(metrics,indent=2)+'\n',encoding='utf-8')
     print(json.dumps({'session_id':session,'is_error':False,'tool_calls':2,
-                      'agent_version':'tokenguard-fixture-agent/1','synthetic_agent':True}))
+                      'agent_version':'tokenguard-fixture-agent/2','synthetic_agent':True}))
 
 
 if __name__=='__main__':

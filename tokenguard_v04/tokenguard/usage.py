@@ -6,6 +6,7 @@ from pathlib import Path
 import re
 import uuid
 from typing import Any, Iterator
+from .experiment_modes import BASELINE_MODES
 
 SCHEMA = 'tokenguard.usage/v1'
 MAX_FILE_BYTES = 32 * 1024 * 1024
@@ -56,6 +57,10 @@ def manifest_fields(raw: Any) -> dict:
         raise ValueError('Manifest schema_version must be 1')
     fields = ('experiment_id','pair_id','task_id','session_id','provider','model','agent_version')
     result = {'schema_version':1, **{field:_text(raw.get(field),field) for field in fields}}
+    mode=raw.get('baseline_mode','unspecified')
+    if mode not in (*BASELINE_MODES,'unspecified'):
+        raise ValueError('Invalid baseline_mode')
+    result['baseline_mode']=mode
     for field in ('prompt_sha256','initial_snapshot_sha256','config_sha256'):
         value=raw.get(field)
         if not isinstance(value,str) or not HASH.fullmatch(value):

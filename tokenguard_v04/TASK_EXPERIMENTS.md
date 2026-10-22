@@ -42,13 +42,32 @@ Linux/macOS 使用 `.venv/bin/python` 和对应 shell 路径，子命令相同�
 
 - 仅复制明确列出的文本文件；拒绝 `.env`、凭据目录、日志、二进制文件、链接、路径穿越和不兼容 Windows 的文件名。单文件最多 1 MiB、总计 16 MiB。这不保证任意源码内没有硬编码秘密，运行前需确认所选文件适合提供给模型。
 - 输出目录必须在初始项目外。原始项目不会运行测试或接受修改。
-- 相同快照和 Prompt、相同模型参数、相同 Hook/MCP 配置和代码版本哈希；每个 trial 使用新 UUID、独立工作目录、独立 Artifact/审计目录。
-- 两组都加载同一 TokenGuard Hook，基线设 `TOKENGUARD_ENABLED=0`，优化组设为 1。此定义比较“安装相同 Hook 后关闭/开启压缩”，基线仍承担 Hook 启动开销，区别于完全未安装 Hook 的基线。
+- 相同快照和 Prompt、相同模型/MCP 参数及代码版本哈希；实验设计固定干预模式与配置哈希，每个 trial 使用新 UUID、独立工作目录、独立 Artifact/审计目录。
+- 默认 `--baseline-mode disabled_hook`：两组都加载同一 TokenGuard Hook，基线设 `TOKENGUARD_ENABLED=0`，优化组设为 1。基线仍承担 Hook 启动和事件处理开销。
+- 可选 `--baseline-mode no_hook`：基线使用空的实验配置，不注入本执行器的 TokenGuard Hook；优化组照常启用。Mock 中基线不创建 Hook 子进程；真实 Claude 中用户/组织已有 Hook 仍可能加载，不修改它们或任何权限设置。
+- 每次实验只采用一种基线，每轮仍是 2 个全新会话。报告明确列出 `baseline_mode` 和每组 `hook_mode`；不同基线的 Usage 不允许配对，也不会汇总到同一 cohort。没有模式信息的通用旧 Usage 标为 `unspecified`，不擅自猜测。
 - 各轮交替 AB/BA 顺序。禁止重复执行、恢复或继续旧会话；执行前检测初始快照、候选目录、配置和运行代码漂移。
 - 每组先验证原始失败可复现，再运行 Agent，最后把候选可编辑源码覆盖到新的可信快照，独立运行原始测试。JUnit 数量、失败、错误和跳过状态参与验收；`expected_tests` 可要求确切测试数。
 - 候选修改测试、删除文件、创建额外文件或更改其他受保护源码都会导致任务失败。最终工作目录保留，便于查看代码差异；压缩不会替代最终测试验收。
 
 目录隔离不是操作系统沙箱。候选代码和测试是本机代码，不应将此框架用于不可信项目。可信测试/配置存储于工作目录之外，但同一系统用户的恶意进程仍可能访问它们；本地记录不提供防篡改认证。进程输出通过临时文件缓冲，单流读取上限 16 MiB，超过则验收失败；临时文件在超时前仍可能占用较大磁盘空间。超时会尝试终止自己启动的进程树。
+
+独立验收的工作目录使用系统临时目录，仅日志写回实验目录，避免将嵌套报告路径继续加长而触发 Windows 路径限制。不修改注册表或系统长路径设置。
+
+## 比较两种基线（完全本地）
+
+```powershell
+# 在 tokenguard_v04 目录执行；脚本只支持 Mock，不提供付费调用参数。
+& $Python .\benchmark\baseline_demo.py --rounds 3
+```
+
+脚本分别为 `disabled_hook` 和 `no_hook` 准备独立配对实验：每种 3 轮、每轮 2 组，共 12 次 Fixture 任务。每个实验保持 AB/BA 轮次顺序，汇总报告与两个实验目录并列放在输出位置，避免额外的 Windows 深路径层级。默认输出 `reports/baseline-modes/`，可用 `--output` 指定较短目录。
+
+输出 Markdown/JSON/CSV，记录任务成功数、Hook 子进程次数/累计耗时、Agent 墙钟耗时中位数及压缩量。汇总保留失败任务，缺失测量用 unavailable；不能只展示成功样本的速度。单次实验 JSON 还包含 `local_wall_clock_pairs` 的逐轮差值。
+
+Hook 子进程耗时包含启动、Python 导入、压缩和本地读写，不是纯启动时间。两种基线按批次执行，时间受缓存和机器负载影响；这些是描述性本地数据，不证明显著性能提升或真实任务节省。真实 Claude 的 Hook 子进程耗时没有可靠测量时仍为 unavailable，不能把审计里的压缩函数耗时代替它。
+
+只准备无 Hook 基线的普通配对实验时，在 `prepare` 命令追加 `--baseline-mode no_hook`，其他预览、预检、执行和 Usage 绑定命令相同。旧任务实验缺少模式字段时继续按其已知旧协议 `disabled_hook` 读取；旧记录没有测过的 Hook 耗时不会补成 0。
 
 ## Claude CLI：先预览，显式开启付费执行
 
@@ -104,6 +123,8 @@ manifest 的会话、模型、Prompt/快照/配置哈希和验收结果来自该
 |任务成功、测试通过、受保护文件未改|本机独立验收|
 |elapsed_ms|Agent 进程墙钟时间，包含其工具调用，不含控制器验收|
 |total_execution_ms|整组流程墙钟时间，含前后独立验收|
+|hook_process_count / hook_process_elapsed_ms|Mock 的 Hook 子进程次数与墙钟总耗时，含启动/处理/I/O；真实宿主没有此测量时 unavailable|
+|original_stdout_chars / visible_stdout_chars|Mock 中两次工具 stdout 的原始/最终可见字符数，包含恢复提示，不等于任务 Token|
 |字符节省、压缩次数、恢复次数|该 trial 的 TokenGuard 审计|
 |task tokens、缓存读取/写入、缓存占比|显式绑定的完整 usage；缺失或部分覆盖为 unavailable|
 |reported billing / actual billed cost|符合证据规则的独立账单；CLI 估价不算账单，导出仍未经独立认证|

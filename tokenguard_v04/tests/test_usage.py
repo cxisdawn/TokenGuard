@@ -153,7 +153,7 @@ class TestUsage(unittest.TestCase):
         self.assertEqual(pair['actual_task_savings_claim'],'not_established')
     def test_compare_identity_mismatch_refused(self):
         baseline=self.bundle()
-        for field,value in [('model','other'),('provider','other'),('prompt_sha256','a'*64),('initial_snapshot_sha256','b'*64),('config_sha256','c'*64),('agent_version','other')]:
+        for field,value in [('model','other'),('provider','other'),('prompt_sha256','a'*64),('initial_snapshot_sha256','b'*64),('config_sha256','c'*64),('agent_version','other'),('baseline_mode','no_hook')]:
             opt=self.bundle('optimized')
             opt['manifest'][field]=value
             if field=='model':
@@ -204,6 +204,21 @@ class TestUsage(unittest.TestCase):
         report=compare(bundles)
         self.assertEqual(report['cohorts'][0]['pairs'],2)
         self.assertEqual(report['cohorts'][0]['metrics']['total_tokens']['baseline'],6600)
+
+    def test_baseline_modes_do_not_share_a_cohort(self):
+        bundles=[self.bundle(baseline_mode='disabled_hook'),self.bundle('optimized',baseline_mode='disabled_hook')]
+        for arm in ('baseline','optimized'):
+            item=self.bundle(arm,pair_id='no-hook-pair',session_id='no-hook-'+arm,baseline_mode='no_hook')
+            for row in item['requests']:row['request_id']='no-hook-'+row['request_id']
+            bundles.append(item)
+        result=compare(bundles)
+        self.assertEqual(result['eligible_pairs'],2)
+        self.assertEqual({c['baseline_mode'] for c in result['cohorts']},{'disabled_hook','no_hook'})
+
+    def test_unknown_usage_baseline_mode_rejected(self):
+        self.assertEqual(self.bundle()['manifest']['baseline_mode'],'unspecified')
+        for mode in ('third_arm',True,None):
+            with self.subTest(mode=mode),self.assertRaises(ValueError):self.bundle(baseline_mode=mode)
     def test_request_reuse_across_rounds_cannot_inflate_sample_size(self):
         bundles=[self.bundle(),self.bundle('optimized')]
         for arm in ('baseline','optimized'):

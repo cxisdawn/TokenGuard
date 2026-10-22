@@ -8,7 +8,7 @@ import uuid
 from .usage import SCHEMA, METRICS, manifest_fields, normalize, validate_format_source
 
 UNAVAILABLE = 'unavailable'
-IDENTITY = ('provider','model','agent_version','prompt_sha256','initial_snapshot_sha256','config_sha256')
+IDENTITY = ('provider','model','agent_version','prompt_sha256','initial_snapshot_sha256','config_sha256','baseline_mode')
 
 
 def _checked(bundle: dict) -> dict:
@@ -122,6 +122,7 @@ def compare(bundles: list[dict]) -> dict:
         b,o=base[0],opt[0]
         bm,om=b['manifest'],o['manifest']
         pair.update(baseline_session=bm['session_id'],optimized_session=om['session_id'],
+                    baseline_mode=bm['baseline_mode'],
                     evidence_kind=bm['evidence_kind'],model=bm['model'],
                     baseline_success=_quality(bm),optimized_success=_quality(om))
         for field in IDENTITY:
@@ -165,11 +166,11 @@ def compare(bundles: list[dict]) -> dict:
     cohorts={}
     for b,o in eligible:
         m=b['manifest']
-        key=tuple(m[k] for k in ('experiment_id','provider','model','agent_version','config_sha256','evidence_kind'))+(b['usage_format'],)
+        key=tuple(m[k] for k in ('experiment_id','provider','model','agent_version','config_sha256','evidence_kind','baseline_mode'))+(b['usage_format'],)
         cohorts.setdefault(key,[]).append((b,o))
     aggregates=[]
     for key,entries in cohorts.items():
-        item=dict(zip(('experiment_id','provider','model','agent_version','config_sha256','evidence_kind','usage_format'),key))
+        item=dict(zip(('experiment_id','provider','model','agent_version','config_sha256','evidence_kind','baseline_mode','usage_format'),key))
         item['pairs']=len(entries)
         item['metrics']={}
         for field in METRICS:
@@ -210,7 +211,7 @@ def export(report: dict, parent: Path) -> Path:
     folder.mkdir(parents=True,exist_ok=False)
     (folder/'report.json').write_text(json.dumps(report,indent=2,ensure_ascii=True)+'\n',encoding='utf-8')
     metric_names=(*METRICS,'elapsed_ms','tool_calls','recovery_count')
-    fields=['experiment_id','task_id','pair_id','status','evidence_kind','baseline_success','optimized_success']
+    fields=['experiment_id','task_id','pair_id','status','baseline_mode','evidence_kind','baseline_success','optimized_success']
     fields += [name for field in metric_names for name in ('baseline_'+field,'optimized_'+field,field+'_reduction_ratio')]
     fields += ['cache_hit_percentage_point_change','baseline_billing','optimized_billing','currency','billing_reduction_ratio','issues']
     with (folder/'report.csv').open('w',encoding='utf-8',newline='') as stream:
@@ -231,14 +232,14 @@ def export(report: dict, parent: Path) -> Path:
     lines=['# Offline usage comparison','',
            'Evidence is caller supplied. Synthetic fixture values are NOT real usage or billed savings.',
            'Complete-task coverage and export authenticity are not independently verified.','',
-           '|Task|Pair|Status|Baseline total tokens|Optimized total tokens|',
-           '|---|---|---|---:|---:|']
+           '|Task|Pair|Baseline mode|Status|Baseline total tokens|Optimized total tokens|',
+           '|---|---|---|---|---:|---:|']
     for pair in report['pairs']:
         metric=pair['metrics'].get('total_tokens') if isinstance(pair['metrics'],dict) else None
         before=metric['baseline'] if isinstance(metric,dict) else UNAVAILABLE
         after=metric['optimized'] if isinstance(metric,dict) else UNAVAILABLE
         task=pair['task_id'].replace('|','\\|'); label=pair['pair_id'].replace('|','\\|')
-        lines.append(f"|{task}|{label}|{pair['status']}|{before}|{after}|")
+        lines.append(f"|{task}|{label}|{pair.get('baseline_mode',UNAVAILABLE)}|{pair['status']}|{before}|{after}|")
     for pair in report['pairs']:
         task=pair['task_id'].replace('|','\\|'); label=pair['pair_id'].replace('|','\\|')
         lines.extend(['',f"### {task} / {label} ({pair['status']})",'',

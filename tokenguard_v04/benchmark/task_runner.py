@@ -8,6 +8,7 @@ sys.path.insert(0,str(Path(__file__).resolve().parent.parent))
 from tokenguard.experiment import attach_usage,execute,prepare
 from tokenguard.experiment_report import report
 from tokenguard.experiment_preflight import check as preflight
+from tokenguard.experiment_modes import BASELINE_MODES
 
 
 def main() -> int:
@@ -18,6 +19,7 @@ def main() -> int:
     prep.add_argument('--task',type=Path,required=True)
     prep.add_argument('--output',type=Path,required=True)
     prep.add_argument('--rounds',type=int,default=1)
+    prep.add_argument('--baseline-mode',choices=BASELINE_MODES,default='disabled_hook')
     run=sub.add_parser('run')
     run.add_argument('experiment',type=Path)
     run.add_argument('--driver',choices=['mock','claude'],default='mock')
@@ -37,7 +39,7 @@ def main() -> int:
     args=parser.parse_args()
     try:
         if args.command=='prepare':
-            print(prepare(args.project,args.task,args.output,args.rounds))
+            print(prepare(args.project,args.task,args.output,args.rounds,args.baseline_mode))
         elif args.command=='run':
             result=execute(args.experiment,args.driver,args.execute,args.allow_paid,args.max_paid_sessions,args.claude)
             if args.execute:

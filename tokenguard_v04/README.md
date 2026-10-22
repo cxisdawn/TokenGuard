@@ -4,6 +4,8 @@
 
 任务级 A/B 执行器已加入：参见 [TASK_EXPERIMENTS.md](TASK_EXPERIMENTS.md)。默认只预览计划；可通过本地 Fixture 子进程验证修复、压缩和独立测试验收，不调用付费模型。真实 Claude CLI 适配器尚未完成付费集成验证。
 
+支持 `prepare --baseline-mode no_hook` 与默认 `disabled_hook` 两种基线。运行 `python benchmark/baseline_demo.py --rounds 3` 可完成两种基线的本地对照，记录 Hook 进程开销并分别输出报告，不调用模型。
+
 ## 关闭与卸载
 
 启动 Claude 前设置 `TOKENGUARD_ENABLED=0` 即可关闭压缩。移除该变量后恢复。
