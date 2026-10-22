@@ -9,7 +9,7 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tokenguard.quality_protocol import pair_assessment, read_bytes
+from tokenguard.quality_protocol import pair_assessment, read_bytes, text_blocks, trace_tools
 
 
 def read_rows(path: Path, errors: list[str] | None = None) -> list[dict]:
@@ -39,9 +39,9 @@ def read_rows(path: Path, errors: list[str] | None = None) -> list[dict]:
     return rows
 
 
-def analyze(folder: Path) -> dict:
-    record = json.loads((folder / 'experiment.json').read_text(encoding='utf-8'))
-    plan = json.loads((folder / 'quality-plan.json').read_text(encoding='utf-8'))
+def analyze(folder: Path, *, write: bool = True) -> dict:
+    record = json.loads(read_bytes(folder / 'experiment.json'))
+    plan = json.loads(read_bytes(folder / 'quality-plan.json'))
     runs = []
     pair_rows = []
     for trial in record['trials']:
@@ -53,7 +53,7 @@ def analyze(folder: Path) -> dict:
             runs.append({**trial, 'state': 'not_run'})
             pair_rows.append({**trial, 'not_run': True})
             continue
-        row = json.loads(result_path.read_text(encoding='utf-8'))
+        row = json.loads(read_bytes(result_path))
         if any(row.get(k) != trial[k] for k in ('trial_id', 'pair_id', 'arm', 'session_id')):
             raise ValueError('Trial identity differs')
         if row.get('not_run'):
@@ -89,11 +89,27 @@ def analyze(folder: Path) -> dict:
         own_pairs = {(r.get('artifact_id'), r.get('compression_id')) for r in compressed}
         manual_pairs = {(r.get('artifact_id'), r.get('compression_id')) for r in scoped if r.get('source') == 'manual'}
         visible = len(seen_pairs & own_pairs)
+        calls, tool_results, trace_errors = trace_tools(events, trial['session_id'])
+        analysis_errors.extend(trace_errors)
+        matched_native = set()
+        for entry in compressed:
+            key = entry.get('tool_use_id')
+            if not isinstance(key, str) or calls.get(key, {}).get('name') != 'Bash':
+                continue
+            guide = (entry.get('artifact_id'), entry.get('compression_id'))
+            text = text_blocks(tool_results.get(key, {}).get('content'))
+            if guide in re.findall(r'\[TokenGuard artifact=([0-9a-f]{64}); compression_id=([0-9a-f]{32})\]', text):
+                matched_native.add(guide)
         pair_rows.append({**row, 'analysis_evidence_errors': analysis_errors})
         grade = row['grade']
+        grade_shape = (isinstance(grade, dict) and type(grade.get('resolved')) is bool and
+                       type(grade.get('evaluation_valid')) is bool)
+        if not grade_shape:
+            analysis_errors.append('grade_schema_invalid')
+            grade = {}
         statuses = grade.get('tests_status', {})
-        runs.append({**trial, 'state': 'completed', 'code_resolved': bool(grade.get('resolved')),
-                     'evaluation_valid': grade.get('evaluation_valid', False),
+        runs.append({**trial, 'state': 'completed', 'code_resolved': grade.get('resolved') is True,
+                     'evaluation_valid': grade_shape and grade.get('evaluation_valid') is True,
                      'execution_status': row.get('execution_status', 'legacy'),
                      'stage_errors': row.get('stage_errors', []),
                      'analysis_evidence_errors': analysis_errors,
@@ -115,10 +131,11 @@ def analyze(folder: Path) -> dict:
                      'changed_files': row['source_changes']['changed_files'],
                      'only_allowed_changes': row['source_changes']['only_allowed_changes'],
                      'test_protocol_satisfied': row.get('protocol_evidence', {}).get('agent_test_protocol_satisfied', 'unavailable'),
-                     'native_compressions_in_matching_bash_results': row.get('protocol_evidence', {}).get(
-                         'native_compressions_in_matching_bash_results', 'unavailable'),
+                     'native_compressions_in_matching_bash_results': len(matched_native),
                      'seed_compressions': row.get('seed_compression', {}).get('compressions', 0),
                      'seed_recoveries': row.get('seed_compression', {}).get('recovery_count', 0),
+                     'seed_original_stdout_sha256': (row.get('seed_delivery') or {}).get('original_stdout_sha256'),
+                     'seed_delivered_prompt_sha256': (row.get('seed_delivery') or {}).get('prompt_sha256'),
                      'cli_aggregate_usage_unverified': row['cli_aggregate_usage_unverified']})
     summary = {}
     for arm in ('baseline', 'optimized'):
@@ -166,6 +183,8 @@ def analyze(folder: Path) -> dict:
                          'CLI usage aggregates are unverified and are not provider invoices',
                          'host transcript markers and model citations are distinct visibility evidence',
                          'code resolution and successful agent completion are separate outcomes']}
+    if not write:
+        return result
     (folder / 'quality-analysis.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     fields = ['trial_id', 'arm', 'state', 'code_resolved', 'task_completed_and_valid', 'agent_end_reason',
               'f2p_success', 'p2p_success', 'agent_elapsed_ms', 'tool_calls', 'compressions',

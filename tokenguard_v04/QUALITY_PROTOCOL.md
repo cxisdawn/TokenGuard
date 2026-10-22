@@ -97,3 +97,5 @@ Set-Location D:\tokenguard-benchmark\tokenguard_v04
 ```
 
 10 项回归使用独立 Python 假 CLI 走实际执行器，运行真实 pytest、Hook、凭证和日志交付流程；独立验收使用受保护的本地 504 项 Fixture 测试，替代官方 Docker 评分器。覆盖原生／受控路径、评分和凭证异常、审计不可用、源码拒绝、进程启动失败、无效流、输入变化阻断下一会话及畸形可选 usage。固定修复与工具消息属于 Mock，**不是真实 Claude 集成或新增 SWE-bench 能力样本**。
+
+多个已有实验的只读分组与配对结果见 [QUALITY_SCORECARD.md](QUALITY_SCORECARD.md)。新命令不改写旧分析文件，不合并不同预算／协议，也不把证据子集当作全部样本。

@@ -2,6 +2,11 @@
 
 ## v0.4
 
+- Read-only multi-experiment scorecards with conservative cohorts, all planned pair outcomes and a separate compression-evidence subset.
+- Descriptive latency, recovery and unverified CLI usage coverage; unavailable provider billing never replaced by a character/token proxy.
+- Reject duplicate experiments/session reuse and observed input changes; preserve existing reports and export fresh Markdown/JSON/CSV.
+- Recompute native Bash/audit metadata matches during analysis and reject malformed boolean grading fields.
+
 - Preserve trial results on local grading, audit, source, receipt, process and stream failures; stop subsequent sessions without automatic retries.
 - Recheck bound evidence, runtime hashes and pristine source before each session; retain blocked trials in report denominators.
 - Tolerate malformed optional CLI usage/model metadata, with unavailable values kept separate from measured zeroes.
