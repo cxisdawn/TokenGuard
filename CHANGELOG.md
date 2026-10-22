@@ -2,6 +2,8 @@
 
 ## v0.4
 
+- Thirteen repeatable local hook/recovery examples, including actual 504-test pytest runs before/after a copied-fixture fix.
+- UTF-8 recovery CLI output without Windows newline translation; subprocess tests cover exact bytes and audit character counts.
 - Explicit disabled-hook and no-hook baselines with separate usage cohorts and backwards-compatible task records.
 - Measured local Hook process counts/time, stdout sizes and repeated offline baseline study reports.
 - Short validation temporary paths and flatter study output for Windows path limits.

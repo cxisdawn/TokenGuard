@@ -28,6 +28,7 @@ $Python = (Resolve-Path .\.venv\Scripts\python.exe).Path
 Push-Location .\tokenguard_v04
 & $Python -m pytest -q
 & $Python .\verify_hook.py
+& $Python .\benchmark\examples.py
 & $Python .\benchmark\usage_demo.py
 Pop-Location
 ```
@@ -53,7 +54,7 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-本地当前版本回归为 150 项通过、1 项因 Windows 符号链接权限跳过；历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准。
+本地当前版本回归为 154 项通过、1 项因 Windows 符号链接权限跳过；历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过。另有 13 个本地例子验证真实 pytest 输出、失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
@@ -64,6 +65,7 @@ $Project = 'C:\work\my-project'
 ## 文档
 
 - [v0.4 接入与恢复说明](tokenguard_v04/README.md)
+- [13 个可重复的本地验证例子](tokenguard_v04/EXAMPLES.md)
 - [离线 usage 与账单配对](tokenguard_v04/USAGE.md)
 - [任务级 A/B 执行、独立验收与付费调用边界](tokenguard_v04/TASK_EXPERIMENTS.md)
 - [v0.3 审查要点](tokenguard_v04/AUDIT_V03.md)

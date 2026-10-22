@@ -1,11 +1,17 @@
 """TokenGuard v0.4 selective artifact recovery and scoped reports."""
 import argparse
 import json
+import sys
 from tokenguard.storage import read_lines, grep_lines
 from tokenguard.audit import summary, diagnostics
 
 
 def main() -> None:
+    # Recovery is a UTF-8 data boundary. Windows newline translation would turn
+    # stored CRLF into CRCRLF and make emitted character counts differ from audit.
+    for stream in (sys.stdout, sys.stderr):
+        if hasattr(stream, 'reconfigure'):
+            stream.reconfigure(encoding='utf-8', newline='')
     parser = argparse.ArgumentParser(description=__doc__)
     sub = parser.add_subparsers(dest='cmd', required=True)
     for kind in ('show', 'grep'):

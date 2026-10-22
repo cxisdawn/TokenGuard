@@ -33,6 +33,7 @@ optimized/
 tg-fixture/
 task-experiment-*/
 baseline-mode-demo-*/
+examples-*/
 
 # Distributions and installer binaries
 build/

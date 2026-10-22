@@ -27,6 +27,9 @@ jobs:
       - name: Manual hook protocol verification
         working-directory: tokenguard_v04
         run: python verify_hook.py
+      - name: Local tool and selective recovery examples
+        working-directory: tokenguard_v04
+        run: python benchmark/examples.py
       - name: Offline usage report demonstration
         working-directory: tokenguard_v04
         run: python benchmark/usage_demo.py

@@ -80,11 +80,14 @@ ID 严格限制为小写 SHA256，拒绝符号链接/路径逃逸。原文原子
 ```powershell
 & $Python .\benchmark\run.py --rounds 3
 & $Python .\benchmark\usage_demo.py
+& $Python .\benchmark\examples.py
 ```
 
 首个命令对 5 个固定场景运行独立 Mock 进程，复制相同初始快照、比较 Hash、使用相同 Prompt 和模型标签；覆盖 pytest 成功/失败、构建错误、真实小 Python Bug fixture 及大 Artifact 尾部恢复。Bug 修复是固定脚本策略，最终运行 504 项 pytest 并检查测试未改，不代表模型能力。三轮为 30 个 arm，工具文本/耗时/恢复均计入报告。
 
 usage_demo 只演示合成 usage 的离线导入和配对。真实使用、字段口径、完整性与费用证据见 [USAGE.md](USAGE.md)。生成内容保存在 reports，Git 默认忽略；没有付费模型调用。
+
+examples 实际运行同一项目修复前后的 504 项 pytest，另验证混合状态、构建、unittest、pip、搜索及安全透传，共 13 例。8 个压缩案例各检查 Artifact 字节及关键词/行号恢复。运行方法、前后文本和边界见 [EXAMPLES.md](EXAMPLES.md)。CLI 恢复明确输出 UTF-8、保留原换行，避免 Windows CRLF 被重复转换。
 
 ## 开发测试
 

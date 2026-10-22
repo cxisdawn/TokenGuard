@@ -1,6 +1,10 @@
 # 验证范围
 
-当前版本在 Windows、Python 3.11 上完成 **150 passed、1 skipped**。跳过项为 Windows 符号链接权限不可用。历史版本独立测试：v0.1 4 项、v0.2 6 项、v0.3 14 项通过。
+当前版本在 Windows、Python 3.11 上完成 **154 passed、1 skipped、53 subtests passed**。跳过项为 Windows 符号链接权限不可用。历史版本独立测试：v0.1 4 项、v0.2 6 项、v0.3 14 项通过。
+
+新增 [13 个可重复的本地例子](../tokenguard_v04/EXAMPLES.md)，全部通过。pytest 修复前/后实际运行 504 项测试，检查 3 个失败变为 0、测试未改和整个失败段落保留；8 个压缩案例的 Artifact 字节一致，16 次有界 grep/show 恢复成功且审计匹配；5 个安全透传案例逐字符相等。它们是本地工具与手动 Hook 子进程验证，不是新的付费/真实 Claude 集成实验。
+
+这些例子复现 Windows CLI CRLF 被二次翻译、实际输出字符数与审计不一致的问题，并发现继承 ASCII 输出编码时 Unicode 恢复失败。CLI 已固定 UTF-8 并关闭换行翻译。新增 4 项子进程回归（含 8 个换行 subtests）验证 Unicode、LF/CRLF/CR/无末尾换行和混合换行；修复前可重复失败、修复后全部通过。磁盘原始 Artifact 无需修改。
 
 覆盖压缩策略与失败保留、Unicode/换行与索引边界、恢复预算、路径保护、损坏回退、项目安装/重复安装/卸载、Hook 子进程协议、doctor、Mock A/B 契约、usage 缓存口径、重复请求、配对一致性、账单证据与质量回退。
 
