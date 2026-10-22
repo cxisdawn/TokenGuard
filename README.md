@@ -54,11 +54,15 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-本地当前版本回归为 154 项通过、1 项因 Windows 符号链接权限跳过；历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过。另有 13 个本地例子验证真实 pytest 输出、失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准。
+本地当前版本回归为 164 项通过、1 项因 Windows 符号链接权限跳过；历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过。另有 13 个本地例子验证真实 pytest 输出、失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
 另已明确授权完成一轮真实任务 A/B：两组均修复 Bug 并通过独立的 504 项测试。优化组 Hook 自动触发 3 次，但收到的 stdout 均不足 3000 字符，实际压缩为 0 次。这验证了本轮任务执行和 Hook 透传分支，不能把 CLI 汇总数字差异解释为 TokenGuard 节省。
+
+后续公开 SWE-bench Verified Pylint 任务三轮对照中，基线候选修复通过 0/3、优化组 1/3；六次会话都触及 20 轮上限，严格正常完成率均为 0/3。优化组实际压缩 3 次，宿主工具消息中均有匹配标记。这是受预算限制的初步观察，不能据此证明能力无损或提升，详见 [质量实验](tokenguard_v04/SWE_BENCH_QUALITY.md)。
+
+另行授权的 40 轮补充对照中，基线代码通过、优化组未通过，双方仍触及轮数上限；优化组实际压缩 0 次，因此这次差异不能归因于压缩信息损失。两个预算条件分别报告，不混算成功率，也不隐去优化失败样本。
 
 **字符下降、本地估算 Token 下降、整个任务实际 Token 与费用下降是不同指标。** 尚无完整真实 A/B usage/账单，因此没有稳定费用节省率结论。所有示例 usage 和费用 Fixture 均为 synthetic，不能用于宣传真实收益。
 
@@ -66,6 +70,7 @@ $Project = 'C:\work\my-project'
 
 - [v0.4 接入与恢复说明](tokenguard_v04/README.md)
 - [13 个可重复的本地验证例子](tokenguard_v04/EXAMPLES.md)
+- [SWE-bench 单任务质量对照](tokenguard_v04/SWE_BENCH_QUALITY.md)
 - [离线 usage 与账单配对](tokenguard_v04/USAGE.md)
 - [任务级 A/B 执行、独立验收与付费调用边界](tokenguard_v04/TASK_EXPERIMENTS.md)
 - [v0.3 审查要点](tokenguard_v04/AUDIT_V03.md)

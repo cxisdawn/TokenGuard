@@ -1,0 +1,2 @@
+# Optional upstream SWE-bench grading dependency; not needed by TokenGuard hooks.
+unidiff==0.7.5

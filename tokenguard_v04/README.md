@@ -89,6 +89,8 @@ usage_demo 只演示合成 usage 的离线导入和配对。真实使用、字�
 
 examples 实际运行同一项目修复前后的 504 项 pytest，另验证混合状态、构建、unittest、pip、搜索及安全透传，共 13 例。8 个压缩案例各检查 Artifact 字节及关键词/行号恢复。运行方法、前后文本和边界见 [EXAMPLES.md](EXAMPLES.md)。CLI 恢复明确输出 UTF-8、保留原换行，避免 Windows CRLF 被重复转换。
 
+中等复杂真实任务的质量对照见 [SWE_BENCH_QUALITY.md](SWE_BENCH_QUALITY.md)：使用公开 SWE-bench Verified Pylint 任务及官方测试指标，先检查原始/参考修复，再单独授权真实 A/B；不把无压缩的试验当作压缩能力验证。
+
 ## 开发测试
 
 在本版本目录执行 `python -m pytest -q` 或 `python -m unittest discover -s tests -v`。手动协议验证为 `python verify_hook.py`。这几类验证与真实 Claude 会话、提供商 usage 和账单证据分开记录。

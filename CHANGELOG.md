@@ -2,6 +2,9 @@
 
 ## v0.4
 
+- Opt-in SWE-bench Verified Pylint quality pilot using official test metrics and independently graded candidates.
+- Three authorized real A/B rounds retained including all max-turn exits; patch correctness and agent completion are reported separately.
+- Compression exposure and exact host-transcript metadata matches, with unverified CLI usage separated from provider billing.
 - Thirteen repeatable local hook/recovery examples, including actual 504-test pytest runs before/after a copied-fixture fix.
 - UTF-8 recovery CLI output without Windows newline translation; subprocess tests cover exact bytes and audit character counts.
 - Explicit disabled-hook and no-hook baselines with separate usage cohorts and backwards-compatible task records.
