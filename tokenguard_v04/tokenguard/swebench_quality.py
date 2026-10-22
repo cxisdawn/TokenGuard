@@ -380,6 +380,35 @@ def parse_stream(raw: str, session: str) -> tuple[dict, dict]:
     return results[0], {'tool_calls': len(tools), 'bash_calls': sum(name == 'Bash' for name in tools.values())}
 
 
+def unavailable_compression() -> dict:
+    """Missing measurements are null, not measured zeroes."""
+    return {'data_available': False, 'compressions': None, 'recovery_count': None, 'saved_chars': None,
+            'records': [], 'counts_status': 'unavailable'}
+
+
+def cli_metadata(response: dict) -> dict:
+    """Optional host metadata must not discard a completed and graded session."""
+    warnings = []
+    usage = response.get('usage', {})
+    if not isinstance(usage, dict):
+        warnings.append('usage')
+        usage = {}
+    fields = ('input_tokens', 'output_tokens', 'cache_read_input_tokens', 'cache_creation_input_tokens')
+    if any(k in usage and (type(usage[k]) is not int or usage[k] < 0) for k in fields):
+        warnings.append('usage')
+    usage = {k: usage[k] for k in fields if type(usage.get(k)) is int and usage[k] >= 0}
+    models = response.get('modelUsage', {})
+    if not isinstance(models, dict) or any(not isinstance(k, str) for k in models):
+        warnings.append('modelUsage')
+        models = {}
+    denials = response.get('permission_denials')
+    if 'permission_denials' in response and not isinstance(denials, list):
+        warnings.append('permission_denials')
+    return {'cli_aggregate_usage_unverified': usage, 'cli_model_names_unverified': sorted(models),
+            'permission_denial_count': len(denials) if isinstance(denials, list) else None,
+            'cli_metadata_warnings': sorted(set(warnings))}
+
+
 def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = False,
                     max_paid_sessions: int = 2, claude: str = 'claude') -> dict:
     record, plan, row = load(folder)
@@ -403,14 +432,29 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
     version = checked([executable, '--version'], folder, 15)
     with locked(folder):
         require(not (folder / 'started.json').exists(), 'Sessions already consumed')
-        write_json(folder / 'started.json', {'driver': 'claude', 'timestamp': audit.timestamp(), 'sessions': count})
+        write_json(folder / 'started.json', {'driver': 'claude', 'timestamp': audit.timestamp(),
+                                            'sessions': count, 'planned_sessions': count})
         for trial in record['trials']:
             root = folder / 'trials' / trial['trial_id']
             prompt, seed_delivery = record['task']['prompt'], None
-            if plan.get('protocol') == 'controlled_initial_log':
-                delivery = preflight_result['seed_inputs']['deliveries'][trial['trial_id']]
-                seed_delivery = activate_seed(folder, delivery, root)
-                prompt = inside(folder, delivery['prompt_path']).read_text(encoding='utf-8')
+            # A previous session or external process may have changed evidence.
+            # Recheck before EACH launch, not merely before reserving the batch.
+            try:
+                preflight_result = checked_preflight(folder, plan, record)
+                current_hashes = {str(p.relative_to(BASE)): sha(p) for p in sorted((BASE / 'tokenguard').glob('*.py'))}
+                require(digest(current_hashes) == record['config']['tools_sha256'], 'Runtime drift before launch')
+                pristine = changes(root / 'worktree', record['files_sha256'], [])
+                require(pristine['only_allowed_changes'], 'Trial worktree changed before launch')
+                if plan.get('protocol') == 'controlled_initial_log':
+                    delivery = preflight_result['seed_inputs']['deliveries'][trial['trial_id']]
+                    seed_delivery = activate_seed(folder, delivery, root)
+                    prompt = inside(folder, delivery['prompt_path']).read_text(encoding='utf-8')
+            except Exception as exc:
+                blocked = {**trial, 'task_success': False, 'not_run': True, 'blocked_before_launch': True,
+                           'stage_errors': [{'stage': 'prelaunch', 'type': type(exc).__name__}]}
+                write_json(root / 'quality-result.json', blocked)
+                write_json(folder / 'execution-stopped.json', blocked)
+                break
             env = {**os.environ, 'PYTHONUTF8': '1', 'PYTHONDONTWRITEBYTECODE': '1',
                    'TOKENGUARD_ENABLED': '1' if trial['arm'] == 'optimized' else '0',
                    'TOKENGUARD_DATA_DIR': str(root / 'tg-data'), 'TOKENGUARD_DIAGNOSTICS': '1',
@@ -421,7 +465,15 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
             argv[argv.index('json')] = 'stream-json'
             argv.append('--verbose')
             print('Starting ' + trial['trial_id'] + ' (new session)', flush=True)
-            run = run_process(argv, root / 'worktree', env, 600, prompt)
+            write_json(root / 'agent-started.json', {**trial, 'timestamp': audit.timestamp(),
+                       'event': 'launch_attempt; not proof of provider requests or billing'})
+            stage_errors = []
+            try:
+                run = run_process(argv, root / 'worktree', env, 600, prompt)
+            except Exception as exc:
+                stage_errors.append({'stage': 'agent_process', 'type': type(exc).__name__})
+                run = {'stdout': '', 'stderr': '', 'exit_code': None, 'elapsed_ms': 0,
+                       'timed_out': False, 'outputs_truncated': False}
             (root / 'agent.stream.jsonl').write_bytes(run['stdout'].encode('utf-8'))
             (root / 'agent.stderr.txt').write_bytes(run['stderr'].encode('utf-8'))
             response, tools, error = {}, {'tool_calls': None, 'bash_calls': None}, None
@@ -429,34 +481,60 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
                 response, tools = parse_stream(run['stdout'], trial['session_id'])
             except (ValueError, KeyError, TypeError) as exc:
                 error = type(exc).__name__
-            patch, check = candidate_patch(folder, record, root / 'worktree')
-            grade = evaluate(folder, plan, row, patch, root / 'evaluation')
-            with audit_scope(root / 'tg-data'):
-                stats = audit.summary(trial['session_id'], record['experiment_id'], source='claude_hook')
-                seed_stats = audit.summary(trial['session_id'], record['experiment_id'], source='manual')
-                audit_rows, _ = audit.events()
-                diagnostics = audit.diagnostics(trial['session_id'], record['experiment_id'], limit=100)
-            final_source = (fingerprint(root / 'worktree', record['task']['editable_files'])
-                            if check['only_allowed_changes'] else None)
-            observed = evidence([json.loads(line) for line in run['stdout'].splitlines() if line.strip()]
-                                if error is None else [], audit_rows, root / 'test-receipts',
-                                session=trial['session_id'], experiment=record['experiment_id'],
-                                initial_source=plan['initial_source_sha256'], final_source=final_source,
-                                required_command=plan['required_command'], image_id=plan['image_id'],
-                                expected_tests=plan['visible_expected_tests'])
+                stage_errors.append({'stage': 'agent_stream', 'type': error})
+            patch, final_source = '', None
+            check = {'only_allowed_changes': False, 'changed_files': [], 'validation_available': False}
+            try:
+                patch, check = candidate_patch(folder, record, root / 'worktree')
+                final_source = (fingerprint(root / 'worktree', record['task']['editable_files'])
+                                if check['only_allowed_changes'] else None)
+            except Exception as exc:
+                stage_errors.append({'stage': 'source_validation', 'type': type(exc).__name__})
+            grade = {'resolved': False, 'evaluation_valid': False, 'tests_status': {},
+                     'evaluation_status': 'unavailable'}
+            if not any(e['stage'] in ('agent_process', 'source_validation') for e in stage_errors):
+                try:
+                    measured_grade = evaluate(folder, plan, row, patch, root / 'evaluation')
+                    require(isinstance(measured_grade, dict) and
+                            type(measured_grade.get('resolved')) is bool and
+                            type(measured_grade.get('evaluation_valid')) is bool, 'Invalid grade shape')
+                    grade = measured_grade
+                except Exception as exc:
+                    stage_errors.append({'stage': 'evaluation', 'type': type(exc).__name__})
+            stats, seed_stats = unavailable_compression(), unavailable_compression()
+            audit_rows, diagnostics = [], {'matching_invocations': None, 'invocations': []}
+            try:
+                with audit_scope(root / 'tg-data'):
+                    stats = audit.summary(trial['session_id'], record['experiment_id'], source='claude_hook')
+                    seed_stats = audit.summary(trial['session_id'], record['experiment_id'], source='manual')
+                    audit_rows, _ = audit.events()
+                    diagnostics = audit.diagnostics(trial['session_id'], record['experiment_id'], limit=100)
+            except Exception as exc:
+                stats, seed_stats = unavailable_compression(), unavailable_compression()
+                stage_errors.append({'stage': 'audit', 'type': type(exc).__name__})
+            observed = {'agent_test_protocol_satisfied': False, 'final_test_command_observed': False,
+                        'native_compressions_in_matching_bash_results': 0, 'evidence_available': False}
+            try:
+                observed = evidence([json.loads(line) for line in run['stdout'].splitlines() if line.strip()]
+                                    if error is None else [], audit_rows, root / 'test-receipts',
+                                    session=trial['session_id'], experiment=record['experiment_id'],
+                                    initial_source=plan['initial_source_sha256'], final_source=final_source,
+                                    required_command=plan['required_command'], image_id=plan['image_id'],
+                                    expected_tests=plan['visible_expected_tests'])
+            except Exception as exc:
+                stage_errors.append({'stage': 'evidence', 'type': type(exc).__name__})
             citations = [r for r in stats['records'] if r['artifact_id'] in str(response.get('result', '')) and
                          r['compression_id'] in str(response.get('result', ''))]
-            host_usage = response.get('usage', {})
-            host_usage = {k: host_usage[k] for k in ('input_tokens', 'output_tokens', 'cache_read_input_tokens',
-                         'cache_creation_input_tokens') if type(host_usage.get(k)) is int}
             success = (run['exit_code'] == 0 and not run['timed_out'] and not run['outputs_truncated'] and
                        error is None and response.get('is_error') is False and grade['resolved'] and
-                       check['only_allowed_changes'])
+                       grade['evaluation_valid'] and check['only_allowed_changes'] and not stage_errors)
             result = {**trial, 'driver': 'claude', 'agent_version': version, 'task_success': success,
                       'grade': grade, 'source_changes': check, 'patch_nonempty': bool(patch),
                       'agent_elapsed_ms': run['elapsed_ms'], 'agent_exit_code': run['exit_code'],
                       'timed_out': run['timed_out'], 'outputs_truncated': run['outputs_truncated'],
                       'execution_error': error, **tools,
+                      'execution_status': 'infrastructure_failed' if stage_errors else 'completed',
+                      'stage_errors': stage_errors,
                       'protocol': plan.get('protocol', 'agent_driven'), 'protocol_evidence': observed,
                       'seed_delivery': seed_delivery,
                       'seed_compression': {k: v for k, v in seed_stats.items() if k != 'records'},
@@ -464,13 +542,17 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
                       'hook_statuses': [d['status'] for d in diagnostics['invocations']],
                       'compression': {k: v for k, v in stats.items() if k != 'records'},
                       'model_cited_matching_metadata_count': len(citations),
-                      'cli_aggregate_usage_unverified': host_usage, 'cli_num_turns': response.get('num_turns'),
-                      'permission_denial_count': len(response.get('permission_denials', [])),
-                      'cli_model_names_unverified': sorted(response.get('modelUsage', {})),
+                      **cli_metadata(response), 'cli_num_turns': response.get('num_turns'),
                       'actual_provider_usage': 'unavailable', 'actual_billed_cost': 'unavailable'}
             write_json(root / 'quality-result.json', result)
             report_quality(folder)
-            print(f"Completed {trial['trial_id']}: success={success}; compressions={stats['compressions']}", flush=True)
+            count_display = stats['compressions'] if stats.get('data_available', True) else 'unavailable'
+            print(f"Completed {trial['trial_id']}: success={success}; compressions={count_display}", flush=True)
+            if stage_errors:
+                write_json(folder / 'execution-stopped.json', {'trial_id': trial['trial_id'],
+                           'timestamp': audit.timestamp(), 'stage_errors': stage_errors,
+                           'reason': 'Local infrastructure failed; no further sessions launched; no automatic retry'})
+                break
     return report_quality(folder)
 
 
@@ -488,11 +570,15 @@ def report_quality(folder: Path) -> dict:
         own = [r for r in rows if r['arm'] == arm]
         arms[arm] = {'planned': len(own), 'completed': sum(not r.get('not_run') for r in own),
                      'successful': sum(r['task_success'] for r in own),
-                     'compressions': sum(r.get('compression', {}).get('compressions', 0) for r in own),
-                     'manual_seed_compressions': sum(r.get('seed_compression', {}).get('compressions', 0) for r in own),
-                     'seed_recoveries': sum(r.get('seed_compression', {}).get('recovery_count', 0) for r in own),
-                     'recoveries': sum(r.get('compression', {}).get('recovery_count', 0) for r in own),
+                     'compressions': sum(r.get('compression', {}).get('compressions') or 0 for r in own),
+                     'manual_seed_compressions': sum(r.get('seed_compression', {}).get('compressions') or 0 for r in own),
+                     'seed_recoveries': sum(r.get('seed_compression', {}).get('recovery_count') or 0 for r in own),
+                     'recoveries': sum(r.get('compression', {}).get('recovery_count') or 0 for r in own),
                      'metadata_citations': sum(r.get('model_cited_matching_metadata_count', 0) for r in own)}
+        arms[arm]['compression_data_complete'] = (arms[arm]['completed'] == arms[arm]['planned'] and
+            all(r.get('compression', {}).get('data_available', True) for r in own if not r.get('not_run')))
+        arms[arm]['infrastructure_failed'] = sum(bool(r.get('stage_errors')) and not r.get('not_run') for r in own)
+        arms[arm]['blocked_before_launch'] = sum(bool(r.get('blocked_before_launch')) for r in own)
     paired = []
     for pair in sorted({r['pair_id'] for r in rows}):
         group = {r['arm']: r for r in rows if r['pair_id'] == pair}
@@ -501,7 +587,7 @@ def report_quality(folder: Path) -> dict:
         exposure = assessment['compression_exposed']
         paired.append({'pair_id': pair, 'baseline_success': b['task_success'], 'optimized_success': o['task_success'],
                        **assessment,
-                       'compression_observed_in_audit': o.get('compression', {}).get('compressions', 0) > 0,
+                       'compression_observed_in_audit': (o.get('compression', {}).get('compressions') or 0) > 0,
                        'compression_exposed': exposure,
                        'observed_quality_drop': not o['task_success'] if assessment['comparison_evidence_satisfied'] and b['task_success'] and
                        not b.get('not_run') and not o.get('not_run') else 'not_evaluable'})
@@ -509,6 +595,8 @@ def report_quality(folder: Path) -> dict:
               'difficulty': '15 min - 1 hour', 'requested_model': record['task']['model'],
               'protocol': plan.get('protocol', 'agent_driven'),
               'scope': plan['scope'], 'arms': arms, 'pairs': paired, 'runs': rows,
+              'execution_stopped': (json.loads((folder / 'execution-stopped.json').read_text(encoding='utf-8'))
+                                    if (folder / 'execution-stopped.json').exists() else None),
               'actual_provider_usage': 'unavailable', 'actual_billed_cost': 'unavailable',
               'general_no_quality_loss_claim': 'not_established; one task and small repeated sample',
               'limitations': ['custom agent source selection/orchestration; not an official full-suite score',
@@ -520,7 +608,8 @@ def report_quality(folder: Path) -> dict:
     write_json(folder / 'quality-report.json', report)
     fields = ['trial_id', 'arm', 'task_success', 'f2p_passed', 'p2p_passed', 'agent_elapsed_ms',
               'tool_calls', 'compressions', 'recovery_count', 'metadata_citations',
-              'test_protocol_satisfied', 'final_test_command_observed', 'seed_compressions', 'seed_recoveries']
+              'test_protocol_satisfied', 'final_test_command_observed', 'seed_compressions', 'seed_recoveries',
+              'execution_status', 'infrastructure_errors', 'compression_data_available']
     lines = ['# SWE-bench quality pilot', '', INSTANCE + '; ' + plan['scope'], '',
              '| Trial | Success | F2P / 4 | P2P / 171 | Native compressions | Native recoveries | Seed compressions | Seed recoveries |',
              '| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |']
@@ -535,16 +624,22 @@ def report_quality(folder: Path) -> dict:
                     'test_protocol_satisfied': row.get('protocol_evidence', {}).get('agent_test_protocol_satisfied', 'unavailable'),
                     'final_test_command_observed': row.get('protocol_evidence', {}).get('final_test_command_observed', 'unavailable'),
                     'seed_compressions': row.get('seed_compression', {}).get('compressions', 0),
-                    'seed_recoveries': row.get('seed_compression', {}).get('recovery_count', 0)}
+                    'seed_recoveries': row.get('seed_compression', {}).get('recovery_count', 0),
+                    'execution_status': row.get('execution_status', 'not_run' if row.get('not_run') else 'legacy'),
+                    'infrastructure_errors': '; '.join(e['stage'] + ':' + e['type'] for e in row.get('stage_errors', [])),
+                    'compression_data_available': row.get('compression', {}).get('data_available', not row.get('not_run', False))}
             writer.writerow({k: flat.get(k, 'unavailable') for k in fields})
+            display = {k: 'unavailable' if v is None else v for k, v in flat.items()}
             lines.append(f"| {row['trial_id']} | {row['task_success']} | {flat['f2p_passed']} | {flat['p2p_passed']} | "
-                         f"{flat.get('compressions', 'unavailable')} | {flat.get('recovery_count', 'unavailable')} | "
-                         f"{flat['seed_compressions']} | {flat['seed_recoveries']} |")
+                         f"{display.get('compressions', 'unavailable')} | {display.get('recovery_count', 'unavailable')} | "
+                         f"{display['seed_compressions']} | {display['seed_recoveries']} |")
     lines += ['', '| Pair | Evidence satisfied | Exposed | Missing evidence |', '| --- | --- | --- | --- |']
     for pair in paired:
         lines.append(f"| {pair['pair_id']} | {pair['comparison_evidence_satisfied']} | {pair['compression_exposed']} | "
                      + ', '.join(pair['reasons']) + ' |')
     lines += ['', 'Unrun cases remain in the report and are not silently excluded.',
+              'Stopped: ' + json.dumps(report['execution_stopped'], ensure_ascii=True),
+              'Compression totals cover available observations only; see compression_data_complete and CSV availability.',
               'Protocol: ' + plan.get('protocol', 'agent_driven') + '.',
               'Native Hook compression and controller-seeded prompt compression are counted separately.',
               'No-compression trials do not measure the effect of compression on coding ability.',

@@ -2,6 +2,12 @@
 
 ## v0.4
 
+- Preserve trial results on local grading, audit, source, receipt, process and stream failures; stop subsequent sessions without automatic retries.
+- Recheck bound evidence, runtime hashes and pristine source before each session; retain blocked trials in report denominators.
+- Tolerate malformed optional CLI usage/model metadata, with unavailable values kept separate from measured zeroes.
+- Fault-tolerant analysis with explicit evidence gaps and manual guide echoes excluded from native Hook matches.
+- Ten full-runner regressions using an offline child CLI and actual local pytest/Hook processes; no provider calls or Docker dependency.
+
 - Actual visible-test receipts bind source/log hashes, exit status, complete test counts and matching Bash responses; command mentions alone do not count.
 - Separate agent-driven/native Hook and opt-in controller-seeded initial-log protocols, with explicit per-pair missing-evidence reasons.
 - Hash-bound preflight/input verification, byte-identical initial artifacts, and separately attributed manual/native compression and recovery counts.

@@ -171,6 +171,12 @@ def pair_assessment(baseline: dict, optimized: dict, protocol: str) -> dict:
     if baseline.get('not_run') or optimized.get('not_run'):
         reasons.append('pair_incomplete')
     for arm, row in (('baseline', baseline), ('optimized', optimized)):
+        if row.get('analysis_evidence_errors'):
+            reasons.append(arm + '_analysis_evidence_unavailable')
+        if row.get('stage_errors'):
+            reasons.append(arm + '_infrastructure_failed')
+        if row.get('compression', {}).get('data_available') is False:
+            reasons.append(arm + '_compression_audit_unavailable')
         if not row.get('grade', {}).get('evaluation_valid'):
             reasons.append(arm + '_independent_grade_invalid')
         if not row.get('source_changes', {}).get('only_allowed_changes'):

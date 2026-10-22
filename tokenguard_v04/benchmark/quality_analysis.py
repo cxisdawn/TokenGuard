@@ -9,15 +9,34 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tokenguard.quality_protocol import pair_assessment
+from tokenguard.quality_protocol import pair_assessment, read_bytes
 
 
-def read_rows(path: Path) -> list[dict]:
+def read_rows(path: Path, errors: list[str] | None = None) -> list[dict]:
+    errors = errors if errors is not None else []
     if not path.exists():
         return []
-    if path.stat().st_size > 16 * 1024 * 1024:
-        raise ValueError('Input exceeds recorded process budget')
-    return [json.loads(line) for line in path.read_text(encoding='utf-8').splitlines() if line.strip()]
+    try:
+        raw = read_bytes(path).decode('utf-8')
+    except (OSError, ValueError) as exc:
+        errors.append(path.name + ':' + type(exc).__name__)
+        return []
+    rows = []
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            row = json.loads(line)
+            if not isinstance(row, dict):
+                raise ValueError('Invalid row')
+            rows.append(row)
+        except ValueError:
+            if path.name + ':invalid_row' not in errors:
+                errors.append(path.name + ':invalid_row')
+        if len(rows) >= 100000:
+            errors.append(path.name + ':row_limit')
+            break
+    return rows
 
 
 def analyze(folder: Path) -> dict:
@@ -37,33 +56,48 @@ def analyze(folder: Path) -> dict:
         row = json.loads(result_path.read_text(encoding='utf-8'))
         if any(row.get(k) != trial[k] for k in ('trial_id', 'pair_id', 'arm', 'session_id')):
             raise ValueError('Trial identity differs')
-        pair_rows.append(row)
-        events = read_rows(root / 'agent.stream.jsonl')
+        if row.get('not_run'):
+            pair_rows.append(row)
+            runs.append({**trial, 'state': 'blocked_before_launch' if row.get('blocked_before_launch') else 'not_run',
+                         'stage_errors': row.get('stage_errors', [])})
+            continue
+        analysis_errors = []
+        events = read_rows(root / 'agent.stream.jsonl', analysis_errors)
         finals = [e for e in events if e.get('type') == 'result']
         final = finals[0] if len(finals) == 1 and finals[0].get('session_id') == trial['session_id'] else {}
+        if not final or any(e.get('session_id', trial['session_id']) != trial['session_id'] for e in events):
+            analysis_errors.append('stream_session_or_final_mismatch')
         tool_messages = []
         tool_errors = 0
         for event in events:
             if event.get('type') != 'user':
                 continue
-            content = event.get('message', {}).get('content', [])
+            message = event.get('message')
+            content = message.get('content', []) if isinstance(message, dict) else []
             if not isinstance(content, list):
                 continue
             for block in content:
                 if isinstance(block, dict) and block.get('type') == 'tool_result':
                     tool_messages.append(json.dumps(block.get('content', ''), ensure_ascii=False))
                     tool_errors += bool(block.get('is_error'))
-        compressed = [r for r in read_rows(root / 'tg-data/audit-v04.jsonl')
+        scoped = [r for r in read_rows(root / 'tg-data/audit-v04.jsonl', analysis_errors)
                       if r.get('event') == 'compression' and r.get('session_id') == trial['session_id'] and
                       r.get('experiment_id') == record['experiment_id']]
+        compressed = [r for r in scoped if r.get('source') == 'claude_hook']
         seen_pairs = {match for text in tool_messages for match in re.findall(
             r'\[TokenGuard artifact=([0-9a-f]{64}); compression_id=([0-9a-f]{32})\]', text)}
-        own_pairs = {(r['artifact_id'], r['compression_id']) for r in compressed}
+        own_pairs = {(r.get('artifact_id'), r.get('compression_id')) for r in compressed}
+        manual_pairs = {(r.get('artifact_id'), r.get('compression_id')) for r in scoped if r.get('source') == 'manual'}
         visible = len(seen_pairs & own_pairs)
+        pair_rows.append({**row, 'analysis_evidence_errors': analysis_errors})
         grade = row['grade']
         statuses = grade.get('tests_status', {})
         runs.append({**trial, 'state': 'completed', 'code_resolved': bool(grade.get('resolved')),
                      'evaluation_valid': grade.get('evaluation_valid', False),
+                     'execution_status': row.get('execution_status', 'legacy'),
+                     'stage_errors': row.get('stage_errors', []),
+                     'analysis_evidence_errors': analysis_errors,
+                     'compression_data_available': row.get('compression', {}).get('data_available', True),
                      'task_completed_and_valid': row['task_success'],
                      'agent_end_reason': final.get('subtype', row.get('execution_error') or 'unknown'),
                      'agent_exit_code': row['agent_exit_code'],
@@ -73,7 +107,8 @@ def analyze(folder: Path) -> dict:
                      'tool_error_results': tool_errors, 'permission_denial_count': row.get('permission_denial_count'),
                      'compressions': row['compression']['compressions'],
                      'compressed_messages_in_host_transcript': visible,
-                     'unattributed_host_metadata_pairs': len(seen_pairs - own_pairs),
+                     'manual_guides_echoed_in_tool_results': len(seen_pairs & manual_pairs),
+                     'unattributed_host_metadata_pairs': len(seen_pairs - own_pairs - manual_pairs),
                      'model_metadata_citations': row['model_cited_matching_metadata_count'],
                      'recovery_count': row['compression']['recovery_count'],
                      'saved_stdout_chars': row['compression']['saved_chars'],
@@ -93,9 +128,13 @@ def analyze(folder: Path) -> dict:
                         'code_resolved': sum(r['code_resolved'] for r in done),
                         'tasks_completed_and_valid': sum(r['task_completed_and_valid'] for r in done),
                         'max_turns_exhausted': sum(r['agent_end_reason'] == 'error_max_turns' for r in done),
-                        'compressions': sum(r['compressions'] for r in done),
+                        'compressions': sum(r['compressions'] or 0 for r in done),
                         'host_transcript_compressed_messages': sum(r['compressed_messages_in_host_transcript'] for r in done),
-                        'recoveries': sum(r['recovery_count'] for r in done)}
+                        'infrastructure_failed': sum(bool(r['stage_errors']) for r in done),
+                        'blocked_before_launch': sum(r['state'] == 'blocked_before_launch' for r in own),
+                        'analysis_evidence_incomplete': sum(bool(r['analysis_evidence_errors']) for r in done),
+                        'compression_data_complete': len(done) == len(own) and all(r['compression_data_available'] for r in done),
+                        'recoveries': sum(r['recovery_count'] or 0 for r in done)}
     pairs = []
     for pair in sorted({r['pair_id'] for r in pair_rows}):
         group = {r['arm']: r for r in pair_rows if r['pair_id'] == pair}
@@ -118,6 +157,8 @@ def analyze(folder: Path) -> dict:
     result = {'schema': 'tokenguard.quality-analysis/v1', 'experiment_id': record['experiment_id'],
               'instance_id': plan['instance_id'], 'summary': summary, 'runs': runs,
               'protocol': plan.get('protocol', 'agent_driven'), 'pairs': pairs,
+              'execution_stopped': (json.loads((folder / 'execution-stopped.json').read_text(encoding='utf-8'))
+                                    if (folder / 'execution-stopped.json').exists() else None),
               'interpretation': conclusion, 'model_api_calls_from_analysis': 0,
               'actual_provider_usage': 'unavailable', 'actual_billed_cost': 'unavailable',
               'limits': [f"single public task, {len({r['pair_id'] for r in runs})} paired rounds, no general non-inferiority proof",
@@ -129,26 +170,30 @@ def analyze(folder: Path) -> dict:
     fields = ['trial_id', 'arm', 'state', 'code_resolved', 'task_completed_and_valid', 'agent_end_reason',
               'f2p_success', 'p2p_success', 'agent_elapsed_ms', 'tool_calls', 'compressions',
               'compressed_messages_in_host_transcript', 'recovery_count', 'test_protocol_satisfied',
-              'native_compressions_in_matching_bash_results', 'seed_compressions', 'seed_recoveries']
+              'native_compressions_in_matching_bash_results', 'seed_compressions', 'seed_recoveries',
+              'execution_status', 'stage_errors', 'compression_data_available']
+    fields += ['analysis_evidence_errors', 'manual_guides_echoed_in_tool_results']
     with (folder / 'quality-analysis.csv').open('w', encoding='utf-8', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for run in runs:
             writer.writerow({k: run.get(k, 'unavailable') for k in fields})
     lines = ['# Real task quality analysis', '', plan['instance_id'], '',
-             '| Trial | Code resolved | Agent complete | End reason | F2P / 4 | P2P / 171 | Compressions | Transcript matches |',
-             '| --- | --- | --- | --- | ---: | ---: | ---: | ---: |']
+             '| Trial | Code resolved | Agent complete | End reason | Execution status | F2P / 4 | P2P / 171 | Compressions | Transcript matches |',
+             '| --- | --- | --- | --- | --- | ---: | ---: | ---: | ---: |']
     for run in runs:
         lines.append('| ' + ' | '.join(str(run.get(k, 'unavailable')) for k in
                      ('trial_id', 'code_resolved', 'task_completed_and_valid', 'agent_end_reason',
-                      'f2p_success', 'p2p_success', 'compressions', 'compressed_messages_in_host_transcript')) + ' |')
+                      'execution_status', 'f2p_success', 'p2p_success', 'compressions', 'compressed_messages_in_host_transcript')) + ' |')
     lines += ['', 'Protocol: ' + plan.get('protocol', 'agent_driven'), '',
               'Pair evidence (all planned pairs, including failures):', '',
               '| Pair | Evidence satisfied | Exposed | Missing evidence |', '| --- | --- | --- | --- |']
     for pair in pairs:
         lines.append(f"| {pair['pair_id']} | {pair['comparison_evidence_satisfied']} | {pair['compression_exposed']} | "
                      + ', '.join(pair['reasons']) + ' |')
-    lines += ['', 'Interpretation: ' + conclusion, '',
+    lines += ['', 'Interpretation: ' + conclusion,
+              'Compression totals cover available observations only; see compression_data_complete.',
+              'Stopped: ' + json.dumps(result['execution_stopped'], ensure_ascii=True), '',
               'Task-specific raw CLI aggregates (UNVERIFIED; not an API/billing savings calculation):', '',
               '| Trial | CLI input | CLI cache read | CLI cache creation | CLI output |',
               '| --- | ---: | ---: | ---: | ---: |']

@@ -75,3 +75,25 @@ if ($LASTEXITCODE -ne 0) { throw 'Preflight failed; do not launch sessions' }
 原生路径用 `--protocol agent_driven` 单独准备。受控模式若实际没有压缩，预检直接失败；不能通过降阈值或追加重复填充来掩盖。由于原始／gold／可见测试需要本地 Docker，CI 的默认检查只运行不依赖 Docker 的离线测试和演示。
 
 真实执行仍需一份新的、明确的付费范围授权及原有 CLI 双重开关；本轮没有这样的授权，也没有实际启动新 Claude 会话。此前授权不能重复使用。实际提供商 Usage、缓存命中和账单缺失时维持 `unavailable`；字符、局部估算 Token 和 CLI 未验证聚合均不替代整个任务账单。
+
+## 执行中异常保留与停止
+
+批次启动时及**每个会话启动前**复核预检文件、输入、工具代码 Hash 和该会话的初始工作目录。前一会话之后证据变化，会将下一项记为 `blocked_before_launch`，不启动该项，也不从报告分母中删掉它。
+
+每次启动前保存 `agent-started.json`，它只表示一次启动尝试，不能证明提供商请求数或已收费。`started.json` 的 sessions/planned_sessions 表示本批次计划数，不能作为实际计费会话数。工具执行结束后，流式 stdout/stderr 及 `quality-result.json` 留在独立 trial 目录。
+
+控制器捕获到进程、流协议、源码校验、独立评分、审计或凭证异常时，记录 `stage_errors` 的阶段与异常类型，保存能获得的结果，并写入 `execution-stopped.json`，停止后续会话。异常消息不进入摘要，避免把任意日志内容带到公开报告。不会自动重试或复用会话 ID；可先用 `report` 和 `quality_analysis.py` 只读核对，之后另行 prepare 新实验。
+
+损坏的 CLI 流仍可对已生成的合法候选执行独立验收；代码 resolved 与会话正常完成分开记录。若评分器自身失败，则 `evaluation_valid=false`，不能把它当作代码确实失败或通过的有效测量。可选 `usage`、`modelUsage`、`permission_denials` 的类型异常单列 `cli_metadata_warnings`，不使完成的会话记录丢失；缺失权限拒绝计数为 null，不假定为 0。
+
+审计不可读取时，逐次压缩／恢复计数为 null，`data_available=false`。汇总仅累加已有观测，并标记 `compression_data_complete=false`；不能把汇总的已知 0 次解释为整批确定没有压缩。Markdown、JSON 和 CSV 都保留停止原因与缺失证据。分析器遇到损坏日志行会保留独立判分，标记 `analysis_evidence_errors`，不认证该对的压缩影响比较；手动指引的工具回显另列 `manual_guides_echoed_in_tool_results`。
+
+运行下列端到端回归，不需要 Docker、Claude、网络或模型授权：
+
+```powershell
+Set-Location D:\tokenguard-benchmark\tokenguard_v04
+& 'D:\tokenguard-benchmark\.venv\Scripts\python.exe' -X utf8 `
+  -m pytest tests/test_quality_execution.py -q
+```
+
+10 项回归使用独立 Python 假 CLI 走实际执行器，运行真实 pytest、Hook、凭证和日志交付流程；独立验收使用受保护的本地 504 项 Fixture 测试，替代官方 Docker 评分器。覆盖原生／受控路径、评分和凭证异常、审计不可用、源码拒绝、进程启动失败、无效流、输入变化阻断下一会话及畸形可选 usage。固定修复与工具消息属于 Mock，**不是真实 Claude 集成或新增 SWE-bench 能力样本**。
