@@ -10,19 +10,17 @@ import sys
 from .experiment import BASE, write_json
 from .experiment_validation import run_process
 from .quality_protocol import file_sha, read_bytes, receipt
+from .visible_tests import canonical_path
 
 
 def inside(folder: Path, value: str) -> Path:
+    folder = canonical_path(folder)
     path = Path(value)
     if not path.is_absolute():
         path = folder / path
-    if not path.absolute().is_relative_to(folder.resolve()):
+    path = canonical_path(path)
+    if not path.is_relative_to(folder):
         raise ValueError('Evidence path escaped experiment')
-    current = folder.resolve()
-    for part in path.absolute().relative_to(current).parts:
-        current /= part
-        if current.is_symlink() or current.resolve() != current.absolute():
-            raise ValueError('Linked evidence path')
     return path
 
 

@@ -13,7 +13,7 @@ from unittest.mock import patch
 from tokenguard import audit
 from tokenguard.quality_protocol import evidence, pair_assessment, receipt, trace_tools
 from tokenguard.quality_seed import build_seeds, checked_preflight, inside
-from tokenguard.visible_tests import fingerprint, run_recorded
+from tokenguard.visible_tests import canonical_path, fingerprint, run_recorded
 
 
 def fixture_receipt(folder, *, run_id='a' * 32, source='initial', code=0, **extra):
@@ -230,6 +230,35 @@ class TestQualityEvidence(unittest.TestCase):
                  patch('pathlib.Path.open') as opener:
                 with self.assertRaisesRegex(ValueError, 'links'):
                     fingerprint(root, ['pylint/a.py'])
+                opener.assert_not_called()
+
+    def test_canonical_spelling_change_is_not_itself_a_link(self):
+        # Windows hosted runners expose RUNNER~1 while resolve expands it. No
+        # string equality between absolute()/resolve() can establish a link.
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary)
+            expanded = path.parent / 'expanded-canonical-spelling'
+            with patch('pathlib.Path.resolve', return_value=expanded):
+                self.assertEqual(canonical_path(path), expanded)
+            if os.name == 'nt':
+                import ctypes
+                get_short = ctypes.windll.kernel32.GetShortPathNameW
+                get_short.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_ulong]
+                get_short.restype = ctypes.c_ulong
+                buffer = ctypes.create_unicode_buffer(32768)
+                self.assertGreater(get_short(str(path), buffer, len(buffer)), 0)
+                alias = Path(buffer.value)
+                self.assertEqual(canonical_path(alias), canonical_path(path))
+                fixture_receipt(alias)
+                self.assertTrue(self.inspect(alias, tool_trace())['initial_test_observed'])
+
+    def test_junction_attribute_is_rejected_before_open(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            fake_stat = type('Stat', (), {'st_file_attributes': 0x400})()
+            with patch('pathlib.Path.is_symlink', return_value=False), \
+                 patch('pathlib.Path.lstat', return_value=fake_stat), patch('pathlib.Path.open') as opener:
+                with self.assertRaisesRegex(ValueError, 'reparse'):
+                    canonical_path(Path(temporary))
                 opener.assert_not_called()
 
     def test_source_filtered_stats_join_recovery_by_compression_id(self):

@@ -6,6 +6,8 @@ import json
 from pathlib import Path
 import re
 
+from .visible_tests import canonical_path
+
 GUIDE = re.compile(r'\[TokenGuard artifact=([0-9a-f]{64}); compression_id=([0-9a-f]{32})\]')
 TEST_RUN = re.compile(r'\[TokenGuard test_run=([0-9a-f]{32})\]')
 MODES = ('agent_driven', 'controlled_initial_log')
@@ -13,6 +15,7 @@ LIMIT = 16 * 1024 * 1024
 
 
 def read_bytes(path: Path) -> bytes:
+    path = canonical_path(path)
     if path.is_symlink() or not path.is_file() or path.stat().st_size > LIMIT:
         raise ValueError('Evidence missing, linked or oversized')
     with path.open('rb') as stream:
@@ -113,8 +116,7 @@ def evidence(events: list[dict], audits: list[dict], receipt_dir: Path, *, sessi
             visible_runs.setdefault(run_id, set()).add(key)
     verified = []
     invalid = 0
-    if receipt_dir.is_symlink() or receipt_dir.resolve() != receipt_dir.absolute():
-        raise ValueError('Linked receipt directory')
+    receipt_dir = canonical_path(receipt_dir)
     if receipt_dir.exists():
         paths = sorted(receipt_dir.glob('*.json'))
         if len(paths) > 1000:

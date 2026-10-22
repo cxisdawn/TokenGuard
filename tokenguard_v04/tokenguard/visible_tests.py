@@ -21,9 +21,26 @@ DEFAULT_TESTS = ['tests/lint/unittest_lint.py', 'tests/test_self.py']
 LIMIT = 16 * 1024 * 1024
 
 
+def canonical_path(path: Path) -> Path:
+    """Reject actual links/reparse points, while accepting Windows 8.3 aliases."""
+    path = path.absolute()
+    if '..' in path.parts:
+        raise ValueError('Parent path traversal is forbidden')
+    for component in (path, *path.parents):
+        if component.is_symlink():
+            raise ValueError('Path links are forbidden')
+        try:
+            attributes = getattr(component.lstat(), 'st_file_attributes', 0)
+        except FileNotFoundError:
+            continue
+        if attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT, including junctions
+            raise ValueError('Path links or reparse points are forbidden')
+    return path.resolve()
+
+
 def fingerprint(root: Path, files: list[str] | tuple[str, ...]) -> str:
     """Hash only declared editable files; reject links before opening a file."""
-    root = root.resolve()
+    root = canonical_path(root)
     hashes = {}
     total = 0
     if not files:
