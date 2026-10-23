@@ -17,9 +17,10 @@ def main() -> None:
     hook=Path(__file__).resolve().with_name('hook.py')
     output=Path(sys.argv[3])
     mode=sys.argv[4]
+    pytest_mode=sys.argv[5] if len(sys.argv)>5 else 'compact'
     if mode not in ('enabled_hook','disabled_hook','no_hook'):
         raise ValueError('Unknown mock Hook mode')
-    metrics={'session_id':session,'hook_mode':mode,'hook_process_count':0,'hook_process_elapsed_ms':0,
+    metrics={'session_id':session,'hook_mode':mode,'pytest_mode':pytest_mode,'hook_process_count':0,'hook_process_elapsed_ms':0,
              'hook_errors':0,'original_stdout_chars':0,'visible_stdout_chars':0}
     env=dict(os.environ)
     env.update({'PYTHONDONTWRITEBYTECODE':'1','PYTEST_DISABLE_PLUGIN_AUTOLOAD':'1'})
@@ -32,7 +33,7 @@ def main() -> None:
                                 'exitCode':result['exit_code'],'interrupted':result['timed_out']}}
         visible=result['stdout']
         if mode!='no_hook':
-            adapted=run_process([sys.executable,str(hook),'--source','mock'],Path.cwd(),env,15,json.dumps(event))
+            adapted=run_process([sys.executable,str(hook),'--source','mock','--pytest-mode',pytest_mode],Path.cwd(),env,15,json.dumps(event))
             metrics['hook_process_count']+=1
             metrics['hook_process_elapsed_ms']+=adapted['elapsed_ms']
             if adapted['exit_code']!=0 or adapted['timed_out'] or adapted['outputs_truncated']:

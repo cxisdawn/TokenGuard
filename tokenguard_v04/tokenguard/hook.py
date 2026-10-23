@@ -16,7 +16,7 @@ from tokenguard.audit import append
 from tokenguard.tokens import estimate
 
 
-def _diagnostic(event: Any, status: str) -> None:
+def _diagnostic(event: Any, status: str, pytest_mode: str = 'compact') -> None:
     if os.environ.get('TOKENGUARD_DIAGNOSTICS') == '1':
         event = event if isinstance(event, dict) else {}
         try:
@@ -26,6 +26,7 @@ def _diagnostic(event: Any, status: str) -> None:
             stdout = response.get('stdout') if isinstance(response, dict) else None
             stderr = response.get('stderr') if isinstance(response, dict) else None
             append({'event': 'hook_invocation', 'status': status, 'session_id': event.get('session_id'),
+                    'pytest_mode': pytest_mode,
                     'experiment_id': os.environ.get('TOKENGUARD_EXPERIMENT_ID'),
                     'tool_use_id': event.get('tool_use_id'),
                     'response_type': type(response).__name__,
@@ -37,7 +38,7 @@ def _diagnostic(event: Any, status: str) -> None:
             pass
 
 
-def _handle(event: Any) -> tuple[dict | None, str]:
+def _handle(event: Any, *, pytest_mode: str = 'compact') -> tuple[dict | None, str]:
     started = time.perf_counter()
     if os.environ.get('TOKENGUARD_ENABLED', '1') == '0':
         return None, 'disabled'
@@ -51,7 +52,7 @@ def _handle(event: Any) -> tuple[dict | None, str]:
     original, command = response.get('stdout'), tool_input.get('command', '')
     if not isinstance(original, str) or not isinstance(command, str):
         return None, 'invalid_text'
-    optimized, strategy = compress(original, command=command)
+    optimized, strategy = compress(original, command=command, pytest_mode=pytest_mode)
     if optimized == original:
         return None, strategy
     identifier = hashlib.sha256(original.encode('utf-8')).hexdigest()
@@ -71,6 +72,7 @@ def _handle(event: Any) -> tuple[dict | None, str]:
             'experiment_id': os.environ.get('TOKENGUARD_EXPERIMENT_ID'), 'tool_name': 'Bash',
             'origin_verification': 'self_reported; no live transcript validation',
             'command_type': command_type(command), 'strategy': strategy, 'artifact_id': identifier,
+            'pytest_mode': pytest_mode,
             'compression_id': compression_id, 'original_chars': len(original), 'optimized_chars': len(candidate),
             'saved_chars': len(original)-len(candidate), 'compression_ratio': len(candidate)/len(original),
             'compression_latency_ms': round((time.perf_counter()-started)*1000, 3), 'recovery_count': 0,
@@ -83,14 +85,14 @@ def _handle(event: Any) -> tuple[dict | None, str]:
     return {'hookSpecificOutput': {'hookEventName': 'PostToolUse', 'updatedToolOutput': changed}}, 'compressed'
 
 
-def handle(event: Any) -> dict | None:
+def handle(event: Any, *, pytest_mode: str = 'compact') -> dict | None:
     try:
-        result, status = _handle(event)
+        result, status = _handle(event, pytest_mode=pytest_mode)
     except Exception as exc:
         result, status = None, 'exception_' + type(exc).__name__
         # Never echo exception messages: paths or hostile output may contain secrets.
         print('TokenGuard fail-open: ' + type(exc).__name__, file=sys.stderr)
-    _diagnostic(event, status)
+    _diagnostic(event, status, pytest_mode)
     return result
 
 
@@ -99,6 +101,7 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument('--tokenguard-v04', action='store_true')
     parser.add_argument('--source', choices=['manual', 'mock', 'claude_hook'])
+    parser.add_argument('--pytest-mode', choices=['compact', 'indexed', 'off'], default='compact')
     args = parser.parse_args()
     if args.source:
         os.environ['TOKENGUARD_SOURCE'] = args.source
@@ -107,11 +110,11 @@ def main() -> None:
             stream.reconfigure(encoding='utf-8')
     try:
         event = json.load(sys.stdin)
-        result = handle(event)
+        result = handle(event, pytest_mode=args.pytest_mode)
         if result is not None:
             print(json.dumps(result, ensure_ascii=True))
     except Exception as exc:
-        _diagnostic(None, 'input_or_output_' + type(exc).__name__)
+        _diagnostic(None, 'input_or_output_' + type(exc).__name__, args.pytest_mode)
         print('TokenGuard fail-open: ' + type(exc).__name__, file=sys.stderr)
 
 if __name__ == '__main__':

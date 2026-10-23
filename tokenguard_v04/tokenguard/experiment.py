@@ -35,11 +35,13 @@ def locked(folder: Path):
 
 
 def prepare(project: Path, spec_path: Path, output: Path, rounds: int = 1,
-            baseline: str = 'disabled_hook') -> Path:
+            baseline: str = 'disabled_hook', *, pytest_mode: str = 'compact') -> Path:
     if type(rounds) is not int or not 1<=rounds<=20:
         raise ValueError('rounds must be 1..20')
     if baseline not in BASELINE_MODES:
         raise ValueError('Unknown baseline mode')
+    if pytest_mode not in ('compact', 'indexed', 'off'):
+        raise ValueError('Unknown pytest mode')
     spec=read_spec(usage.load(spec_path))
     project=project.resolve()
     payload,hashes=snapshot(project,spec['files'])
@@ -51,7 +53,7 @@ def prepare(project: Path, spec_path: Path, output: Path, rounds: int = 1,
     write_json(folder/'task.json',spec)
     # Intervention settings stay outside candidate code; permissions are untouched.
     import installer
-    settings=installer.install(folder/'control',Path(sys.executable))
+    settings=installer.install(folder/'control',Path(sys.executable),pytest_mode=pytest_mode)
     settings_copy=folder/'settings.json'
     settings_copy.write_bytes(settings.read_bytes())
     write_json(folder/'no-hook-settings.json',{})
@@ -59,7 +61,7 @@ def prepare(project: Path, spec_path: Path, output: Path, rounds: int = 1,
     tool_hashes={str(p.relative_to(BASE)):hashlib.sha256(p.read_bytes()).hexdigest()
                  for p in sorted((BASE/'tokenguard').glob('*.py'))}
     config={'max_turns':spec['max_turns'],'timeout_seconds':spec['timeout_seconds'],
-            'baseline_mode':baseline,
+            'baseline_mode':baseline,'pytest_mode':pytest_mode,
             'task_spec_sha256':digest(spec),
             'python':sys.version,'tools_sha256':digest(tool_hashes),
             'settings_sha256':hashlib.sha256(settings_copy.read_bytes()).hexdigest(),
@@ -95,6 +97,8 @@ def load_experiment(folder: Path) -> dict:
     if hashlib.sha256(spec['prompt'].encode()).hexdigest()!=record['prompt_sha256']:
         raise ValueError('Prompt changed')
     config=record['config']
+    if config.get('pytest_mode', 'compact') not in ('compact', 'indexed', 'off'):
+        raise ValueError('Unknown pytest mode')
     mode=baseline_mode(config)
     if mode=='no_hook' or 'no_hook_settings_sha256' in config:
         if hashlib.sha256((folder/'no-hook-settings.json').read_bytes()).hexdigest()!=config.get('no_hook_settings_sha256'):
@@ -133,7 +137,8 @@ def load_experiment(folder: Path) -> dict:
 def command(folder: Path, record: dict, trial: dict, driver: str, executable: str) -> list[str]:
     if driver=='mock':
         return [sys.executable,str(BASE/'tokenguard'/'experiment_mock.py'),str(folder/'task.json'),
-                trial['session_id'],str(folder/'trials'/trial['trial_id']/'driver'),hook_mode(record,trial)]
+                trial['session_id'],str(folder/'trials'/trial['trial_id']/'driver'),hook_mode(record,trial),
+                record['config'].get('pytest_mode', 'compact')]
     if driver!='claude':
         raise ValueError('Unknown driver')
     return [executable,'--print','--output-format','json','--session-id',trial['session_id'],
@@ -158,6 +163,7 @@ def execute(folder: Path, driver: str = 'mock', execute_run: bool = False,
     folder=folder.resolve()
     record=load_experiment(folder)
     plan={'dry_run':not execute_run,'driver':driver,'sessions':len(record['trials']),
+          'pytest_mode':record['config'].get('pytest_mode','compact'),
           'baseline_mode':baseline_mode(record['config']),
           'trial_hook_modes':{t['trial_id']:hook_mode(record,t) for t in record['trials']},
           'paid_sessions':len(record['trials']) if driver=='claude' else 0,

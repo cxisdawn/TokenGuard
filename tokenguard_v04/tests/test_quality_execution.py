@@ -20,7 +20,7 @@ CLI = Path(__file__).with_name('fixtures') / 'quality_cli.py'
 
 
 @contextmanager
-def experiment(protocol='agent_driven'):
+def experiment(protocol='agent_driven', *, pytest_mode='compact'):
     with tempfile.TemporaryDirectory(prefix='tg-quality-execution-') as temporary:
         root = Path(temporary).resolve()
         project = root / 'project'
@@ -43,9 +43,9 @@ def experiment(protocol='agent_driven'):
                 'editable_files': ['pylint/arithmetic.py'], 'test_files': ['test_arithmetic.py'],
                 'max_turns': 2, 'timeout_seconds': 60, 'expected_tests': 504}
         write_json(root / 'task.json', task)
-        folder = prepare(project, root / 'task.json', root / 'output', 1, baseline='no_hook')
+        folder = prepare(project, root / 'task.json', root / 'output', 1, baseline='no_hook', pytest_mode=pytest_mode)
         record = json.loads((folder / 'experiment.json').read_text(encoding='utf-8'))
-        plan = {'protocol': protocol, 'instance_id': 'offline-fixture',
+        plan = {'protocol': protocol, 'instance_id': 'offline-fixture', 'pytest_mode': pytest_mode,
                 'scope': 'offline mock CLI/fixture; NOT official scoring or live Claude',
                 'image_id': 'offline-fixture', 'visible_expected_tests': 504,
                 'initial_source_sha256': fingerprint(folder / 'snapshot', task['editable_files']),
@@ -235,3 +235,21 @@ class TestQualityExecution(unittest.TestCase):
             self.assertEqual(optimized['compression']['compressions'], 1)
             baseline = next(r for r in report['runs'] if r['arm'] == 'baseline')
             self.assertEqual(baseline['seed_compression']['compressions'], 0)
+
+    def test_controller_seed_uses_prepared_indexed_mode(self):
+        with experiment('controlled_initial_log', pytest_mode='indexed') as (folder, record, plan):
+            env = {**os.environ, 'PYTHONUTF8': '1', 'PYTEST_DISABLE_PLUGIN_AUTOLOAD': '1',
+                   'TOKENGUARD_TEST_RECEIPTS_DIR': str(folder/'receipts'),
+                   'TOKENGUARD_TEST_SESSION_ID': 'controller-preflight', 'TOKENGUARD_TEST_ORIGIN': 'controller',
+                   'TOKENGUARD_EXPERIMENT_ID': record['experiment_id']}
+            initial = run_process([sys.executable, str(folder/'snapshot/tests/pytest.py')], folder/'snapshot', env, 60)
+            seeds = build_seeds(folder, record, folder, initial, next((folder/'receipts').glob('*.json')))
+            for arm in ('baseline','optimized'):
+                delivery=seeds['deliveries']['001-'+arm]
+                self.assertEqual(delivery['pytest_mode'],'indexed')
+                text=(folder/delivery['prompt_path']).read_text(encoding='utf-8')
+                self.assertEqual('pytest PASSED index' in text,arm=='optimized')
+            data=folder/seeds['deliveries']['001-optimized']['recovery_data_dir']
+            row=json.loads((data/'audit-v04.jsonl').read_text(encoding='utf-8'))
+            self.assertEqual(row['strategy'],'pytest_pass_summary_indexed')
+            self.assertEqual(row['pytest_mode'],'indexed')

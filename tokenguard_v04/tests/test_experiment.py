@@ -73,6 +73,23 @@ class TaskExperiments(unittest.TestCase):
         settings=json.loads((folder/'settings.json').read_text())
         self.assertEqual(set(settings),{'hooks'})
 
+    def test_pytest_mode_is_pinned_in_settings_config_and_mock_process(self):
+        for mode in ('indexed','off'):
+            with self.subTest(mode=mode):
+                folder=exp.prepare(self.project,self.spec,self.root/'output',baseline='no_hook',pytest_mode=mode)
+                record=exp.load_experiment(folder)
+                self.assertEqual(record['config']['pytest_mode'],mode)
+                settings=json.loads((folder/'settings.json').read_text(encoding='utf-8'))
+                self.assertIn('--pytest-mode '+mode,settings['hooks']['PostToolUse'][0]['hooks'][0]['command'])
+                self.assertEqual(exp.execute(folder)['pytest_mode'],mode)
+                result=exp.execute(folder,driver='mock',execute_run=True)
+                self.assertEqual(result['completed_trials'],2)
+                for trial in record['trials']:
+                    metrics=json.loads((folder/'trials'/trial['trial_id']/'driver/worker-metrics.json').read_text())
+                    self.assertEqual(metrics['pytest_mode'],mode)
+        with self.assertRaises(ValueError):
+            exp.prepare(self.project,self.spec,self.root/'output',pytest_mode='invalid')
+
     def test_output_inside_original_project_rejected(self):
         with self.assertRaises(ValueError):exp.prepare(self.project,self.spec,self.project/'output')
 

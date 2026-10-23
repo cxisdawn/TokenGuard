@@ -9,7 +9,9 @@ import tempfile
 import uuid
 
 
-def install(project: Path, python: Path, uninstall: bool = False) -> Path:
+def install(project: Path, python: Path, uninstall: bool = False, *, pytest_mode: str = 'compact') -> Path:
+    if pytest_mode not in ('compact', 'indexed', 'off'):
+        raise ValueError('Unknown pytest mode')
     project = project.resolve()
     if project == Path.home().resolve() or project == (Path.home()/'.claude').resolve():
         raise ValueError('Global/user Claude configuration cannot be targeted')
@@ -46,7 +48,8 @@ def install(project: Path, python: Path, uninstall: bool = False) -> Path:
             command = ' '.join('"'+p+'"' for p in paths)
         else:
             command = ' '.join(shlex.quote(p) for p in paths)
-        kept.append({'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': command+' '+marker+' --source claude_hook', 'timeout': 10}]})
+        mode = '' if pytest_mode == 'compact' else ' --pytest-mode ' + pytest_mode
+        kept.append({'matcher': 'Bash', 'hooks': [{'type': 'command', 'command': command+' '+marker+' --source claude_hook'+mode, 'timeout': 10}]})
     hooks['PostToolUse'] = kept
     target.parent.mkdir(parents=True, exist_ok=True)
     if target.exists():
@@ -69,8 +72,9 @@ def main() -> None:
     parser.add_argument('--project', type=Path, required=True)
     parser.add_argument('--python', type=Path, default=Path(sys.executable))
     parser.add_argument('--uninstall', action='store_true')
+    parser.add_argument('--pytest-mode', choices=['compact', 'indexed', 'off'], default='compact')
     args = parser.parse_args()
-    print(install(args.project, args.python, args.uninstall))
+    print(install(args.project, args.python, args.uninstall, pytest_mode=args.pytest_mode))
 
 if __name__ == '__main__':
     main()

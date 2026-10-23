@@ -20,6 +20,7 @@ def main() -> int:
     prep.add_argument('--output',type=Path,required=True)
     prep.add_argument('--rounds',type=int,default=1)
     prep.add_argument('--baseline-mode',choices=BASELINE_MODES,default='disabled_hook')
+    prep.add_argument('--pytest-mode',choices=['compact','indexed','off'],default='compact')
     run=sub.add_parser('run')
     run.add_argument('experiment',type=Path)
     run.add_argument('--driver',choices=['mock','claude'],default='mock')
@@ -39,7 +40,7 @@ def main() -> int:
     args=parser.parse_args()
     try:
         if args.command=='prepare':
-            print(prepare(args.project,args.task,args.output,args.rounds,args.baseline_mode))
+            print(prepare(args.project,args.task,args.output,args.rounds,args.baseline_mode,pytest_mode=args.pytest_mode))
         elif args.command=='run':
             result=execute(args.experiment,args.driver,args.execute,args.allow_paid,args.max_paid_sessions,args.claude)
             if args.execute:

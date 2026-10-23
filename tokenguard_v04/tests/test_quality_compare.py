@@ -113,6 +113,11 @@ class TestQualityScorecard(unittest.TestCase):
                 owner[key] = value
                 self.assertEqual(len(API['scorecard']([one, two])['cohorts']), 2)
 
+        one=synthetic_item()
+        two=deepcopy(one)
+        two['record']['config']['pytest_mode']='indexed'
+        self.assertEqual(len(API['scorecard']([one,two])['cohorts']),2)
+
     def test_incomplete_pair_stays_in_denominator_without_false_failure_measurement(self):
         item = synthetic_item((False, False))
         item['analysis']['runs'][1] = {'arm': 'optimized', 'pair_id': 'round-001', 'state': 'not_run'}

@@ -35,6 +35,7 @@ def cohort(record: dict, plan: dict) -> dict:
     return {'task_id': task['task_id'], 'instance_id': plan['instance_id'], 'provider': task['provider'],
             'requested_model': task['model'], 'protocol': plan.get('protocol', 'agent_driven'),
             'protocol_declared': 'protocol' in plan,
+            'pytest_mode': config.get('pytest_mode', 'compact'),
             'max_turns': task['max_turns'], 'timeout_seconds': task['timeout_seconds'],
             'baseline_mode': config.get('baseline_mode', 'unspecified'),
             'prompt_sha256': record['prompt_sha256'], 'initial_snapshot_sha256': record['initial_snapshot_sha256'],

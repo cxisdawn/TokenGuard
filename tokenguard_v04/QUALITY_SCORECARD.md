@@ -1,5 +1,7 @@
 # 跨实验的只读质量汇总
 
+新实验的 `pytest_mode`（compact / indexed / off）也作为分组条件；旧记录缺省按历史 compact 处理，不回写。不同模式不合并为同一质量成功率，详见 [PYTEST_NAVIGATION.md](PYTEST_NAVIGATION.md)。
+
 2026-10-23 新增一对 `controlled_initial_log` 真实实验，作为第三组单独汇总：受控压缩比较证据满足，基线修复、优化组未修复并新增 9 项回归。详见 [QUALITY_PILOT_RESULTS.md](QUALITY_PILOT_RESULTS.md)。下文八个历史会话的结果保持原有分组，不与新协议合并。
 
 `benchmark/quality_compare.py` 汇总已有实验，不启动 Agent、Docker 或提供商请求，也不重跑评分器。它校验原始快照和配置，读取已保存的独立判分、宿主流与压缩审计，然后在新的唯一目录输出 Markdown、JSON 和逐配对 CSV。

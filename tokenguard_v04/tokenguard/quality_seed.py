@@ -51,7 +51,8 @@ def build_seeds(folder: Path, record: dict, output: Path, visible: dict, receipt
             event = {'hook_event_name': 'PostToolUse', 'session_id': trial['session_id'],
                      'tool_name': 'Bash', 'tool_use_id': 'controller-initial-log',
                      'tool_input': {'command': 'python pytest.py'}, 'tool_response': original}
-            run = run_process([sys.executable, '-X', 'utf8', str(BASE / 'tokenguard/hook.py'), '--source', 'manual'],
+            run = run_process([sys.executable, '-X', 'utf8', str(BASE / 'tokenguard/hook.py'), '--source', 'manual',
+                               '--pytest-mode', record.get('config', {}).get('pytest_mode', 'compact')],
                               folder, {**os.environ, 'PYTHONUTF8': '1', 'TOKENGUARD_ENABLED': '1',
                                        'TOKENGUARD_DATA_DIR': str(data),
                                        'TOKENGUARD_EXPERIMENT_ID': record['experiment_id']},
@@ -71,6 +72,7 @@ def build_seeds(folder: Path, record: dict, output: Path, visible: dict, receipt
         prompt_path.write_bytes(seed_prompt(record['task']['prompt'], response).encode())
         manifests[trial['trial_id']] = {
             'protocol': 'controlled_initial_log', 'session_id': trial['session_id'],
+            'pytest_mode': record.get('config', {}).get('pytest_mode', 'compact'),
             'prompt_path': str(prompt_path.relative_to(folder)), 'prompt_sha256': file_sha(prompt_path),
             'original_stdout_sha256': source['stdout_sha256'],
             'original_stdout_chars': len(raw), 'delivered_stdout_chars': len(response['stdout']),
@@ -118,6 +120,7 @@ def checked_preflight(folder: Path, plan: dict, record: dict) -> dict:
         for trial in record['trials']:
             delivery = seeds['deliveries'][trial['trial_id']]
             if (delivery['session_id'] != trial['session_id'] or
+                    delivery.get('pytest_mode', 'compact') != record.get('config', {}).get('pytest_mode', 'compact') or
                     delivery['compressed'] != (trial['arm'] == 'optimized') or
                     delivery['original_stdout_sha256'] != source['stdout_sha256'] or
                     file_sha(inside(folder, delivery['prompt_path'])) != delivery['prompt_sha256']):

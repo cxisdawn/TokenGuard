@@ -94,9 +94,10 @@ def visible_wrapper(image_id: str, source_files: list[str] | None = None) -> str
 
 def prepare_quality(instance_file: Path, harness: Path, output: Path, rounds: int = 3,
                     model: str = 'deepseek-flash', compat_wheel: Path | None = None,
-                    max_turns: int = 20, protocol: str = 'agent_driven') -> Path:
+                    max_turns: int = 20, protocol: str = 'agent_driven', *, pytest_mode: str = 'compact') -> Path:
     require(type(max_turns) is int and 1 <= max_turns <= 100, 'max_turns must be 1..100')
     require(protocol in MODES, 'Unknown quality protocol')
+    require(pytest_mode in ('compact', 'indexed', 'off'), 'Unknown pytest mode')
     row = instance(instance_file)
     harness = harness.resolve()
     harness_commit = checked(['git', 'rev-parse', 'HEAD'], harness)
@@ -186,11 +187,12 @@ def prepare_quality(instance_file: Path, harness: Path, output: Path, rounds: in
                 'expect_initial_failure': False, 'expected_tests': None}
         spec_path = root / 'task.json'
         write_json(spec_path, spec)
-        folder = prepare(project, spec_path, output, rounds, baseline='no_hook')
+        folder = prepare(project, spec_path, output, rounds, baseline='no_hook', pytest_mode=pytest_mode)
     # Neither the official hidden test patch nor the gold solution enters a worktree.
     write_json(folder / 'official-instance.json', row)
     plan = {'schema': 'tokenguard.swebench-quality/v1', 'instance_id': INSTANCE,
             'image_id': image_id, 'upstream_image_id': upstream_image_id, 'protocol': protocol,
+            'pytest_mode': pytest_mode,
             'initial_source_sha256': fingerprint(folder / 'snapshot', editable),
             'visible_expected_tests': 169,
             'required_command': f'"{python}" pytest.py',
@@ -211,6 +213,8 @@ def prepare_quality(instance_file: Path, harness: Path, output: Path, rounds: in
 def load(folder: Path, *, verify_runtime: bool = True) -> tuple[dict, dict, dict]:
     record = load_experiment(folder)
     plan = json.loads((folder / 'quality-plan.json').read_text(encoding='utf-8'))
+    require(plan.get('pytest_mode', 'compact') == record['config'].get('pytest_mode', 'compact'),
+            'Pytest mode differs from prepared configuration')
     row = instance(folder / 'official-instance.json')
     require(plan['instance_sha256'] == sha(folder / 'official-instance.json'), 'Task evidence changed')
     if verify_runtime:
@@ -321,7 +325,8 @@ def preflight(folder: Path) -> dict:
             os.environ.update(TOKENGUARD_SOURCE='manual', TOKENGUARD_ENABLED='1')
             replacement = handle({'hook_event_name': 'PostToolUse', 'tool_name': 'Bash', 'session_id': 'quality-preflight',
                                   'tool_input': {'command': 'python pytest.py'},
-                                  'tool_response': {'stdout': visible['stdout'], 'stderr': visible['stderr']}})
+                                  'tool_response': {'stdout': visible['stdout'], 'stderr': visible['stderr']}},
+                                 pytest_mode=record['config'].get('pytest_mode', 'compact'))
         finally:
             for key, value in previous.items():
                 if value is None:
@@ -329,6 +334,7 @@ def preflight(folder: Path) -> dict:
                 else:
                     os.environ[key] = value
     result = {'schema': 'tokenguard.swebench-preflight/v1', 'model_api_calls': 0,
+              'pytest_mode': record['config'].get('pytest_mode', 'compact'),
               'protocol': plan.get('protocol', 'agent_driven'),
               'original': original, 'gold': gold, 'visible_test_exit': visible['exit_code'],
               'visible_stdout_chars': len(visible['stdout']), 'manual_hook_compressed': replacement is not None,
@@ -415,6 +421,7 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
     count = len(record['trials'])
     if not execute:
         return {'dry_run': True, 'sessions': count, 'model': record['task']['model'],
+                'pytest_mode': record.get('config', {}).get('pytest_mode', 'compact'),
                 'protocol': plan.get('protocol', 'agent_driven'),
                 'max_turns_flag': record['task']['max_turns'], 'timeout_seconds': 600, 'baseline_mode': 'no_hook',
                 'benchmark': INSTANCE, 'paid_requests': 'multiple per session; billed cost unavailable'}
@@ -592,6 +599,7 @@ def report_quality(folder: Path) -> dict:
                        'observed_quality_drop': not o['task_success'] if assessment['comparison_evidence_satisfied'] and b['task_success'] and
                        not b.get('not_run') and not o.get('not_run') else 'not_evaluable'})
     report = {'schema': 'tokenguard.swebench-quality-report/v1', 'instance_id': INSTANCE,
+              'pytest_mode': record.get('config', {}).get('pytest_mode', 'compact'),
               'difficulty': '15 min - 1 hour', 'requested_model': record['task']['model'],
               'protocol': plan.get('protocol', 'agent_driven'),
               'scope': plan['scope'], 'arms': arms, 'pairs': paired, 'runs': rows,

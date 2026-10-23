@@ -38,7 +38,8 @@ def _installed_argv(project: Path) -> tuple[list[str] | None, str]:
     if hook.get('type') != 'command' or hook.get('async'):
         return None, 'not_synchronous_command'
     argv = shlex.split(hook['command'], posix=True)
-    if len(argv) != 5 or argv[2:] != ['--tokenguard-v04', '--source', 'claude_hook']:
+    if (len(argv) not in (5, 7) or argv[2:5] != ['--tokenguard-v04', '--source', 'claude_hook'] or
+            (len(argv) == 7 and (argv[5] != '--pytest-mode' or argv[6] not in ('compact', 'indexed', 'off')))):
         return None, 'unsupported_command_shape'
     expected_hook = Path(__file__).resolve().parent / 'hook.py'
     # Do not execute arbitrary configuration commands, interpreters or shell expressions.
