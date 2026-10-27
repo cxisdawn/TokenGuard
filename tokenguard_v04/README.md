@@ -20,7 +20,9 @@ $env:TOKENGUARD_ENABLED = '0'
 .\install.ps1 -Project 'C:\work\my-project' -Python $Python -Uninstall
 ```
 
-已有旧版本 Hook 不会被自动删除。若同项目仍有 v0.3 条目，应先处理重复注册，再做实验。当前版本不改变 Claude 权限、Bypass 或模型配置。
+跨目录重新安装会替换项目内由安装器生成的标准 v0.4 Bash Hook，合并同版本重复注册；卸载也识别这些旧路径，旧目录不必仍然存在。修改前会逐字备份原配置。仅识别完整参数及安装器的命令引用格式；额外参数、复合 shell 命令、其他 matcher/type、异步及无法确认的手写条目保持不变。
+
+v0.1–v0.3 Hook 不会被自动删除。若同项目仍有 v0.3 条目，应先处理重复注册，再做实验。当前版本不改变 Claude 权限、Bypass 或模型配置。安装后退出当前 Claude Code，再在目标项目目录执行 `claude`；通过 `/hooks` 查看新配置，`doctor` 的离线通过不代表运行中的宿主已经重新加载。
 
 ## 策略与保护
 

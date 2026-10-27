@@ -2,6 +2,10 @@
 
 ## v0.4
 
+- Replace duplicate managed v0.4 hooks when reinstalling from a different checkout; preserve byte-identical configuration backups and unrelated settings.
+- Match complete installer command serialization and arguments before migrating/uninstalling; preserve unknown arguments, shell expressions and other hook types/versions.
+- Add 19 installation migration and command-ownership regression cases, including Windows/POSIX paths and missing old checkout files.
+
 - Preserve pytest warning, captured-output and plugin report sections; reject live-output ambiguity and parse parameter IDs containing `::` conservatively.
 - Preserve CR/LF/CRLF report terminators when appending Hook recovery metadata.
 - Add a 108-check local contract benchmark using actual pytest fixtures, Hook/recovery subprocesses, immutable source hashes and negative-control tests; no model calls.

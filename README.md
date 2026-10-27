@@ -46,6 +46,8 @@ $Project = 'C:\work\my-project'
 
 安装器只更新目标项目的 `.claude/settings.local.json`，备份原文件并保留其他 Hook/权限，不修改全局配置。代码保留 `install.ps1`/`installer.py` 作为源码接入脚本；仓库不提供二进制安装包或 Release 附件。
 
+从新目录重新安装时，标准 v0.4 Bash Hook 会迁移到新路径并去重；其他版本及无法确认归属的手写命令保留。安装后退出并重新启动目标项目中的 Claude Code，再通过 `/hooks` 检查配置。
+
 如本机策略不允许执行 PowerShell 脚本，可直接运行等效 Python 安装器：
 
 ```powershell
@@ -56,7 +58,7 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-2026-10-27 本地当前版本回归为 **303 passed、1 skipped、359 subtests passed**；跳过项为 Windows 符号链接权限不可用。历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过，源码保留。另有 108 项实际 pytest 输出契约、21 项导航检查及 13 个本地例子通过，覆盖失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准，详见 [验证范围](docs/VALIDATION.md)。
+2026-10-27 本地当前版本回归为 **322 passed、1 skipped、359 subtests passed**，包含 19 项安装迁移补充回归；跳过项为 Windows 符号链接权限不可用。历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过，源码保留。另有 108 项实际 pytest 输出契约、21 项导航检查及 13 个本地例子通过，覆盖失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准，详见 [验证范围](docs/VALIDATION.md)。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 

@@ -223,6 +223,11 @@ class TestIndexIntegration(unittest.TestCase):
         with self.assertRaises(ValueError):
             install(project, Path(sys.executable), pytest_mode='invalid')
         install(project, Path(sys.executable), True)
+        # Unknown arguments are outside the installer's managed command shape.
+        self.assertEqual(json.loads(path.read_text(encoding='utf-8')), data)
+        data['hooks']['PostToolUse'][0]['hooks'][0]['command'] = data['hooks']['PostToolUse'][0]['hooks'][0]['command'].removesuffix(' --pytest-mode indexed --other')
+        path.write_text(json.dumps(data), encoding='utf-8')
+        install(project, Path(sys.executable), True)
         self.assertEqual(json.loads(path.read_text(encoding='utf-8'))['hooks']['PostToolUse'], [])
 
     @unittest.skipUnless(os.name == 'nt', 'Windows PowerShell installation')

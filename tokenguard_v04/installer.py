@@ -2,11 +2,42 @@
 import argparse
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import shlex
 import sys
 import tempfile
 import uuid
+
+
+def _managed_v04(hook: object) -> bool:
+    """Recognize our exact command contract across checkout moves, without running it."""
+    if (not isinstance(hook, dict) or hook.get('type') != 'command' or
+            hook.get('async', False) is not False or not isinstance(hook.get('command'), str)):
+        return False
+    try:
+        argv = shlex.split(hook['command'], posix=True)
+    except ValueError:
+        return False
+    if (len(argv) not in (5, 7) or argv[2:5] != ['--tokenguard-v04', '--source', 'claude_hook'] or
+            (len(argv) == 7 and (argv[5] != '--pytest-mode' or argv[6] not in ('compact', 'indexed', 'off')))):
+        return False
+    # Paths need not still exist: cleaning a moved/deleted installation is the
+    # purpose of migration. Require our actual serialization as well as argv:
+    # shlex alone loses shell operators and single/double-quote semantics.
+    paths = argv[:2]
+    if all(PureWindowsPath(path).is_absolute() for path in paths):
+        if any(path != PureWindowsPath(path).as_posix() or
+               any(c in path for c in '\n\r"$`%') for path in paths):
+            return False
+        encoded = ' '.join('"' + path + '"' for path in paths)
+        tail = tuple(part.casefold() for part in PureWindowsPath(paths[1]).parts[-2:])
+    elif all(PurePosixPath(path).is_absolute() for path in paths):
+        encoded = ' '.join(map(shlex.quote, paths))
+        tail = PurePosixPath(paths[1]).parts[-2:]
+    else:
+        return False
+    return (tail == ('tokenguard', 'hook.py') and
+            hook['command'] == encoded + ' ' + ' '.join(argv[2:]))
 
 
 def install(project: Path, python: Path, uninstall: bool = False, *, pytest_mode: str = 'compact') -> Path:
@@ -23,19 +54,20 @@ def install(project: Path, python: Path, uninstall: bool = False, *, pytest_mode
     if not isinstance(settings, dict):
         raise ValueError('Settings must be an object')
     hooks = settings.setdefault('hooks', {})
+    if not isinstance(hooks, dict):
+        raise ValueError('Hooks must be an object')
     entries = hooks.setdefault('PostToolUse', [])
     if not isinstance(entries, list):
         raise ValueError('PostToolUse must be an array')
     marker = '--tokenguard-v04'
     kept = []
     for entry in entries:
-        def owned(h: dict) -> bool:
-            command = h.get('command', '')
-            return marker in command and script.as_posix() in command
-        if not any(owned(h) for h in entry.get('hooks', [])):
+        if not isinstance(entry, dict) or not isinstance(entry.get('hooks', []), list):
+            raise ValueError('Hook entries must be objects with hook arrays')
+        if entry.get('matcher') != 'Bash' or not any(_managed_v04(h) for h in entry.get('hooks', [])):
             kept.append(entry)
             continue
-        remaining = [h for h in entry.get('hooks', []) if not owned(h)]
+        remaining = [h for h in entry.get('hooks', []) if not _managed_v04(h)]
         if remaining:
             kept.append({**entry, 'hooks': remaining})
     if not uninstall:
