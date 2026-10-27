@@ -76,6 +76,32 @@ class TestQualityEvidence(unittest.TestCase):
                 result = self.inspect(folder, tool_trace())
                 self.assertFalse(result['initial_test_observed'])
 
+    def test_missing_or_nonboolean_execution_flags_are_unknown_not_success(self):
+        for field in ('timed_out', 'outputs_truncated'):
+            for value in ('missing', None, 0, 'false'):
+                with self.subTest(field=field, value=value), tempfile.TemporaryDirectory() as temporary:
+                    folder = Path(temporary)
+                    fixture_receipt(folder)
+                    path, _ = fixture_receipt(folder, run_id='b' * 32, source='final')
+                    row = json.loads(path.read_text())
+                    if value == 'missing':
+                        row.pop(field)
+                    else:
+                        row[field] = value
+                    path.write_text(json.dumps(row))
+                    result = self.inspect(folder, tool_trace() + tool_trace('b' * 32, 't2'))
+                    self.assertFalse(result['agent_test_protocol_satisfied'])
+                    self.assertEqual(result['invalid_receipts'], 1)
+
+    def test_boolean_or_noninteger_receipt_exit_code_is_invalid(self):
+        for value in (False, True, 0.0, '0', None):
+            with self.subTest(value=value), tempfile.TemporaryDirectory() as temporary:
+                folder = Path(temporary)
+                fixture_receipt(folder, code=value)
+                result = self.inspect(folder, tool_trace())
+                self.assertFalse(result['initial_test_observed'])
+                self.assertEqual(result['invalid_receipts'], 1)
+
     def test_wrong_test_count_is_incomplete(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)

@@ -5,6 +5,7 @@ import argparse
 from collections import Counter
 import csv
 import hashlib
+from itertools import islice
 import json
 from pathlib import Path
 import statistics
@@ -14,7 +15,7 @@ import uuid
 BASE = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BASE))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from quality_analysis import analyze
+from quality_analysis import analyze, mapping
 from tokenguard.experiment import load_experiment
 from tokenguard.quality_protocol import MODES, file_sha, read_bytes
 from tokenguard.quality_seed import checked_preflight, inside
@@ -58,7 +59,8 @@ def measurement(values: list, planned: int) -> dict:
 
 def outcome(baseline: dict, optimized: dict) -> str:
     if any(r.get('state') != 'completed' or r.get('evaluation_valid') is not True or
-           r.get('only_allowed_changes') is not True for r in (baseline, optimized)):
+           r.get('only_allowed_changes') is not True or type(r.get('code_resolved')) is not bool
+           for r in (baseline, optimized)):
         return 'ungraded_or_incomplete'
     b, o = baseline.get('code_resolved') is True, optimized.get('code_resolved') is True
     return ('both_resolved' if o else 'baseline_only_resolved') if b else (
@@ -68,11 +70,13 @@ def outcome(baseline: dict, optimized: dict) -> str:
 def arm_summary(runs: list[dict], arm: str) -> dict:
     own = [r for r in runs if r['arm'] == arm]
     done = [r for r in own if r['state'] == 'completed']
-    graded = [r for r in done if r.get('evaluation_valid') is True and r.get('only_allowed_changes') is True]
+    graded = [r for r in done if r.get('evaluation_valid') is True and r.get('only_allowed_changes') is True
+              and type(r.get('code_resolved')) is bool]
     return {'planned': len(own), 'recorded': len(done), 'valid_grades': len(graded),
             'code_resolved': sum(r.get('code_resolved') is True for r in graded),
             'strict_task_success': sum(r.get('task_completed_and_valid') is True for r in graded),
-            'not_run': sum(r['state'] != 'completed' for r in own),
+            'not_run': sum(r['state'] in ('not_run', 'blocked_before_launch') for r in own),
+            'evidence_invalid': sum(r['state'] == 'evidence_invalid' for r in own),
             'blocked_before_launch': sum(r['state'] == 'blocked_before_launch' for r in own),
             'infrastructure_failed': sum(bool(r.get('stage_errors')) for r in done),
             'max_turns_exhausted': sum(r.get('agent_end_reason') == 'error_max_turns' for r in done),
@@ -85,7 +89,7 @@ def arm_summary(runs: list[dict], arm: str) -> dict:
             'agent_elapsed_ms': measurement([r.get('agent_elapsed_ms') for r in own], len(own)),
             'tool_calls': measurement([r.get('tool_calls') for r in own], len(own)),
             'cli_usage_UNVERIFIED': {key: measurement([
-                r.get('cli_aggregate_usage_unverified', {}).get(key) for r in own], len(own)) for key in USAGE_FIELDS}}
+                mapping(r.get('cli_aggregate_usage_unverified')).get(key) for r in own], len(own)) for key in USAGE_FIELDS}}
 
 
 def scorecard(experiments: list[dict]) -> dict:
@@ -115,7 +119,8 @@ def scorecard(experiments: list[dict]) -> dict:
                 origins = [arms.get(a, {}).get('seed_original_stdout_sha256') for a in ('baseline', 'optimized')]
                 if not origins[0] or origins[0] != origins[1]:
                     reasons.append('controlled_initial_observation_unknown_or_mismatched')
-            elif arms.get('optimized', {}).get('native_compressions_in_matching_bash_results', 0) < 1:
+            elif not (valid_number(arms.get('optimized', {}).get('native_compressions_in_matching_bash_results')) and
+                      arms['optimized']['native_compressions_in_matching_bash_results'] >= 1):
                 reasons.append('native_transcript_compression_not_observed')
             eligible = pair['comparison_evidence_satisfied'] is True and not reasons
             b, o = arms.get('baseline', {}), arms.get('optimized', {})
@@ -164,7 +169,8 @@ def scorecard(experiments: list[dict]) -> dict:
 
 
 def evidence_hashes(folder: Path, record: dict) -> dict:
-    names = ['experiment.json', 'quality-plan.json', 'execution-stopped.json', 'quality-preflight-latest.json']
+    names = ['experiment.json', 'task.json', 'settings.json', 'no-hook-settings.json', 'mcp.json',
+             'official-instance.json', 'quality-plan.json', 'execution-stopped.json', 'quality-preflight-latest.json']
     marker = folder / 'quality-preflight-latest.json'
     if marker.exists():
         try:
@@ -173,8 +179,27 @@ def evidence_hashes(folder: Path, record: dict) -> dict:
         except (OSError, ValueError, KeyError, TypeError):
             pass  # Invalid preflight remains ineligible; raw marker is still hashed.
     names += ['trials/' + trial['trial_id'] + '/' + relative for trial in record['trials']
-              for relative in ('quality-result.json', 'agent.stream.jsonl', 'tg-data/audit-v04.jsonl')]
+              for relative in ('quality-result.json', 'agent-started.json', 'agent.stream.jsonl', 'tg-data/audit-v04.jsonl')]
     hashes = {}
+    # Receipt membership and all bytes consumed by the verifier belong to the
+    # consistency check. Hash missing companions too, so creation is detectable.
+    for trial in record['trials']:
+        prefix = 'trials/' + trial['trial_id'] + '/'
+        directory = prefix + 'test-receipts'
+        try:
+            receipt_dir = canonical_path(folder / directory)
+            receipts = list(islice(receipt_dir.glob('*.json'), 1001)) if receipt_dir.exists() else []
+            if len(receipts) > 1000:
+                raise ValueError('Too many receipts')
+            hashes[directory] = sorted(p.name for p in receipts) if receipt_dir.exists() else None
+            for path in receipts:
+                names += [directory + '/' + path.with_suffix(suffix).name
+                          for suffix in ('.json', '.stdout.txt', '.stderr.txt')]
+        except (OSError, ValueError) as exc:
+            hashes[directory] = {'error': type(exc).__name__}
+        for name in record['task']['editable_files']:
+            names.append(prefix + 'worktree/' + name)
+    names += ['snapshot/' + name for name in record['task']['files']]
     for name in names:
         path = folder / name
         if not path.exists():
@@ -185,9 +210,12 @@ def evidence_hashes(folder: Path, record: dict) -> dict:
         except (OSError, ValueError) as exc:
             # The analysis already flags oversized/unsafe stream evidence. Keep
             # the sample visible and record that no full hash was available.
-            stat = path.lstat()
-            hashes[name] = {'sha256': None, 'error': type(exc).__name__,
-                            'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
+            try:
+                stat = path.lstat()
+                metadata = {'size': stat.st_size, 'mtime_ns': stat.st_mtime_ns}
+            except OSError:
+                metadata = {}
+            hashes[name] = {'sha256': None, 'error': type(exc).__name__, **metadata}
     return hashes
 
 
@@ -215,6 +243,16 @@ def collect(folders: list[Path]) -> tuple[list[dict], list[dict]]:
         if plan.get('instance_sha256') and file_sha(folder / 'official-instance.json') != plan['instance_sha256']:
             raise ValueError('Task instance evidence changed')
         hashes = evidence_hashes(folder, record)
+        # Put pinned-input validation inside the hash observation interval too.
+        # Otherwise a change after the first validation but before the initial
+        # hash snapshot would look stable throughout analysis.
+        try:
+            if (load_experiment(folder) != record or
+                    json.loads(read_bytes(folder / 'quality-plan.json')) != plan or
+                    (plan.get('instance_sha256') and hashes['official-instance.json'] != plan['instance_sha256'])):
+                raise ValueError('Prepared inputs differ')
+        except (OSError, ValueError, KeyError, TypeError):
+            raise ValueError('Input evidence changed while reading; retry after the experiment stops') from None
         analysis = analyze(folder, write=False)
         seed_inputs_verified = None
         if plan.get('protocol') == 'controlled_initial_log':

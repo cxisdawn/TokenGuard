@@ -84,8 +84,9 @@ class TestLineIndex(unittest.TestCase):
     def test_disable_index_preserves_previous_scan_cap(self):
         identifier=save_original('x'*(MAX_SCAN+1)+'\ntail\n')
         with patch.dict(os.environ,{'TOKENGUARD_INDEX_ENABLED':'0'}):
-            self.assertIn('limit',read_lines(identifier,2,1))
-        self.assertEqual(events()[0][-1]['index_status'],'disabled')
+            with self.assertRaisesRegex(ValueError, 'scan limit'):
+                read_lines(identifier,2,1)
+        self.assertEqual(events()[0], [])
         self.assertFalse(index_path(identifier).exists())
     def test_keyword_range_context_clipping_and_overlap(self):
         identifier=save_original('needle outside\nstart\nneedle\nneedle\nend\nneedle outside\n')
@@ -165,5 +166,91 @@ class TestLineIndex(unittest.TestCase):
         self.assertEqual(json.loads(built.stdout)['total_lines'],3)
         recovered=subprocess.run([sys.executable,str(ROOT/'tg.py'),'grep',identifier,'needle','--start','2','--end','2'],capture_output=True,text=True,check=True)
         self.assertEqual(recovered.stdout,'2: two needle\n')
+
+    def test_character_checkpoints_reach_beyond_scan_limit_in_single_line(self):
+        raw = '😀' * (MAX_SCAN+10) + 'TAIL'
+        identifier = save_original(raw)
+        self.assertEqual(read_lines(identifier, 1, 1, char_offset=MAX_SCAN+10), 'TAIL')
+        row = events()[0][-1]
+        self.assertEqual(row['index_status'], 'built')
+        self.assertLess(row['scanned_chars'], CHUNK)
+        self.assertGreater(row['seek_offset_bytes'], MAX_SCAN)
+        self.assertEqual(row['index_build_bytes'], len(raw.encode('utf-8')))
+        self.assertEqual(read_lines(identifier, 1, 1, char_offset=MAX_SCAN+10), 'TAIL')
+        self.assertEqual(events()[0][-1]['index_status'], 'reused')
+        self.assertEqual(events()[0][-1]['index_build_bytes'], 0)
+
+    def test_legacy_two_field_index_is_rebuilt_without_source_changes(self):
+        import hashlib
+        import struct
+        from tokenguard.line_index import HEADER, MAGIC
+        identifier = save_original('line\r\n' * 400 + 'tail')
+        source = artifact_path(identifier)
+        original = source.read_bytes()
+        ensure_index(identifier, source)
+        sidecar = index_path(identifier)
+        fields = list(HEADER.unpack(sidecar.read_bytes()[:HEADER.size]))
+        fields[0] = b'TGIDX001'
+        fields[-1] = 1
+        legacy = HEADER.pack(*fields) + struct.pack('<2Q', 1, 0)
+        sidecar.write_bytes(legacy + hashlib.sha256(legacy).digest())
+        self.assertEqual(read_lines(identifier, 401, 1), 'tail')
+        self.assertEqual(events()[0][-1]['index_status'], 'built')
+        self.assertEqual(sidecar.read_bytes()[:8], MAGIC)
+        self.assertEqual(source.read_bytes(), original)
+
+    def test_multibyte_and_crlf_boundaries_in_small_index_chunks(self):
+        raw = ('😀原\r\nß\rthree\n' * 400) + 'tail'
+        identifier = save_original(raw)
+        with patch('tokenguard.line_index.CHUNK', 25), patch('tokenguard.line_index.BYTE_STRIDE', 25):
+            self.assertEqual(read_lines(identifier, 1198, 4), '😀原\r\nß\rthree\ntail')
+            info = ensure_index(identifier, artifact_path(identifier))
+            self.assertEqual(info.total_lines, 1201)
+            self.assertEqual(read_lines(identifier, 1198, 1, char_offset=1), '原\r\n')
+
+    def test_artifact_change_after_index_lookup_cannot_return_wrong_line(self):
+        identifier = save_original('a\n' * 400 + 'TARGET\n')
+        source = artifact_path(identifier)
+        replacement = ('zz\n' * 400 + 'TARGET\n').encode('utf-8')
+        def mutate_after_lookup(*args, **kwargs):
+            position = ensure_index(*args, **kwargs)
+            source.write_bytes(replacement)
+            return position
+        with patch('tokenguard.storage.ensure_index', side_effect=mutate_after_lookup):
+            with self.assertRaisesRegex(ValueError, 'Artifact changed'):
+                read_lines(identifier, 401, 1)
+        self.assertEqual(events()[0], [])
+        self.assertEqual(source.read_bytes(), replacement)
+        self.assertEqual(read_lines(identifier, 401, 1), 'TARGET\n')
+
+    def test_artifact_change_during_open_handle_read_is_rejected_without_audit_success(self):
+        identifier = save_original('a\n' * 400 + 'TARGET\n')
+        source = artifact_path(identifier)
+        replacement = ('zz\n' * 400 + 'TARGET\n').encode('utf-8')
+        original_open = Path.open
+        class MutatingRead:
+            def __init__(self, stream):
+                self.stream = stream
+                self.mutated = False
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                self.stream.close()
+            def __getattr__(self, name):
+                return getattr(self.stream, name)
+            def readline(self, *args):
+                result = self.stream.readline(*args)
+                if not self.mutated:
+                    self.mutated = True
+                    source.write_bytes(replacement)
+                return result
+        def changing_open(path, *args, **kwargs):
+            stream = original_open(path, *args, **kwargs)
+            return MutatingRead(stream) if path == source and args and args[0] == 'r' else stream
+        with patch.object(Path, 'open', changing_open):
+            with self.assertRaisesRegex(ValueError, 'Artifact changed during recovery read'):
+                read_lines(identifier, 401, 1)
+        self.assertEqual(events()[0], [])
+        self.assertEqual(source.read_bytes(), replacement)
 
 if __name__=='__main__': unittest.main()

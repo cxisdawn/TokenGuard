@@ -58,7 +58,10 @@ def _handle(event: Any, *, pytest_mode: str = 'compact') -> tuple[dict | None, s
     identifier = hashlib.sha256(original.encode('utf-8')).hexdigest()
     compression_id = uuid.uuid4().hex
     cli = str(Path(__file__).resolve().parent.parent / 'tg.py')
-    guide = (f'\n[TokenGuard artifact={identifier}; compression_id={compression_id}]\n'
+    # Starting with LF after an original CR would silently turn its terminator
+    # into CRLF. Reuse an existing line boundary before adding the recovery guide.
+    separator = '' if optimized.endswith(('\r', '\n')) else '\n'
+    guide = (f'{separator}[TokenGuard artifact={identifier}; compression_id={compression_id}]\n'
              f'Selective recovery: python "{cli}" grep {identifier} "PATTERN" --compression-id {compression_id}\n'
              'Use show ID --start N --count 30 for a line range.\n')
     candidate = optimized + guide

@@ -2,6 +2,13 @@
 
 ## v0.4
 
+- Preserve pytest warning, captured-output and plugin report sections; reject live-output ambiguity and parse parameter IDs containing `::` conservatively.
+- Preserve CR/LF/CRLF report terminators when appending Hook recovery metadata.
+- Add a 108-check local contract benchmark using actual pytest fixtures, Hook/recovery subprocesses, immutable source hashes and negative-control tests; no model calls.
+- Recover long Unicode lines with paired line/character cursors and sparse intra-line checkpoints; retain complete grep matches and report omitted context explicitly.
+- Revalidate scorecard evidence instead of trusting cached success fields; distinguish invalid/missing evidence from measured failure and preserve planned denominators.
+- Document the negative controlled coding pilot prominently; software checks do not establish coding-quality or billing savings.
+
 - Read-only multi-experiment scorecards with conservative cohorts, all planned pair outcomes and a separate compression-evidence subset.
 - Descriptive latency, recovery and unverified CLI usage coverage; unavailable provider billing never replaced by a character/token proxy.
 - Reject duplicate experiments/session reuse and observed input changes; preserve existing reports and export fresh Markdown/JSON/CSV.

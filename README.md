@@ -10,7 +10,8 @@
 
 - pytest/unittest 成功记录聚合、构建重复日志、pip 进度、重复警告及文件名搜索压缩。
 - Traceback、Git diff 和重要失败内容保护；不确定或异常时透传原始输出。
-- SHA256 Artifact、本地关键词/行范围恢复、有界返回及稀疏行索引。
+- SHA256 Artifact、本地关键词/行范围/长行片段恢复、有界返回及稀疏字符定位索引。
+- pytest 可选测试名称索引；实时输出歧义、报告段和未知格式采用保守保护。
 - session/experiment 审计，记录净字符节省、恢复量和本地处理开销。
 - 固定快照、独立进程、多轮离线 A/B，生成 Markdown/JSON/CSV。
 - DeepSeek/Anthropic usage-only 导出的离线归一与配对分析；缓存、账单、任务质量分列。
@@ -28,6 +29,7 @@ $Python = (Resolve-Path .\.venv\Scripts\python.exe).Path
 Push-Location .\tokenguard_v04
 & $Python -m pytest -q
 & $Python .\verify_hook.py
+& $Python -X utf8 .\benchmark\pytest_contracts.py
 & $Python .\benchmark\examples.py
 & $Python .\benchmark\usage_demo.py
 Pop-Location
@@ -54,7 +56,7 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-本地当前版本回归为 206 项通过、1 项因 Windows 符号链接权限跳过，另有 85 个 subtests 通过；历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过。另有 13 个本地例子验证真实 pytest 输出、失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准。
+2026-10-27 本地当前版本回归为 **303 passed、1 skipped、359 subtests passed**；跳过项为 Windows 符号链接权限不可用。历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过，源码保留。另有 108 项实际 pytest 输出契约、21 项导航检查及 13 个本地例子通过，覆盖失败详情、选择性恢复及安全透传，不调用模型。CI 配置覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准，详见 [验证范围](docs/VALIDATION.md)。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
@@ -63,6 +65,8 @@ $Project = 'C:\work\my-project'
 后续公开 SWE-bench Verified Pylint 任务三轮对照中，基线候选修复通过 0/3、优化组 1/3；六次会话都触及 20 轮上限，严格正常完成率均为 0/3。优化组实际压缩 3 次，宿主工具消息中均有匹配标记。这是受预算限制的初步观察，不能据此证明能力无损或提升，详见 [质量实验](tokenguard_v04/SWE_BENCH_QUALITY.md)。
 
 另行授权的 40 轮补充对照中，基线代码通过、优化组未通过，双方仍触及轮数上限；优化组实际压缩 0 次，因此这次差异不能归因于压缩信息损失。两个预算条件分别报告，不混算成功率，也不隐去优化失败样本。
+
+最近一次采用受控初始日志的真实对照中，基线 F2P 4/4、P2P 171/171，优化组 F2P 0/4、P2P 162/171，且达到轮数上限。这是需要保留的负面结果；单对实验无法确定压缩的因果影响，当前也没有编码能力无损结论，见 [完整结果](tokenguard_v04/QUALITY_PILOT_RESULTS.md)。后续语义、恢复与证据修复均通过离线验证，不把软件回归通过当作重新测得的模型能力。
 
 **字符下降、本地估算 Token 下降、整个任务实际 Token 与费用下降是不同指标。** 尚无完整真实 A/B usage/账单，因此没有稳定费用节省率结论。所有示例 usage 和费用 Fixture 均为 synthetic，不能用于宣传真实收益。
 
@@ -75,6 +79,9 @@ $Project = 'C:\work\my-project'
 ## 文档
 
 - [v0.4 接入与恢复说明](tokenguard_v04/README.md)
+- [语义、长行恢复与评测证据验证](tokenguard_v04/SAFETY_VALIDATION.md)
+- [pytest 测试名称索引及保守透传](tokenguard_v04/PYTEST_NAVIGATION.md)
+- [受控初始日志真实 A/B 的负面结果](tokenguard_v04/QUALITY_PILOT_RESULTS.md)
 - [13 个可重复的本地验证例子](tokenguard_v04/EXAMPLES.md)
 - [SWE-bench 单任务质量对照](tokenguard_v04/SWE_BENCH_QUALITY.md)
 - [测试执行凭证与受控初始日志](tokenguard_v04/QUALITY_PROTOCOL.md)

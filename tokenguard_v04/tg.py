@@ -2,7 +2,7 @@
 import argparse
 import json
 import sys
-from tokenguard.storage import read_lines, grep_lines
+from tokenguard.storage import read_lines, grep_lines, RecoveryLimitError
 from tokenguard.audit import summary, diagnostics
 
 
@@ -20,6 +20,8 @@ def main() -> None:
         p.add_argument('--compression-id')
         p.add_argument('--session', dest='session_id')
         p.add_argument('--max-chars', type=int, default=12000)
+        p.add_argument('--start-char', type=int, default=0,
+                       help='zero-based Unicode character offset within --start (continuation cursor)')
         if kind == 'show':
             p.add_argument('--start', type=int, default=1)
             p.add_argument('--count', type=int, default=30)
@@ -58,7 +60,8 @@ def main() -> None:
     args = parser.parse_args()
     try:
         if args.cmd in ('show', 'grep'):
-            options = {'compression_id': args.compression_id, 'session_id': args.session_id, 'max_chars': args.max_chars}
+            options = {'compression_id': args.compression_id, 'session_id': args.session_id,
+                       'max_chars': args.max_chars, 'char_offset': args.start_char}
             if args.cmd == 'show':
                 count = args.end-args.start+1 if args.end is not None else args.count
                 result = read_lines(args.id, args.start, count, **options)
@@ -105,6 +108,8 @@ def main() -> None:
                 print(f"Uncalibrated local estimate, compressed outputs only: {result['estimated_original_tokens']} -> {result['estimated_optimized_tokens']} tokens ({result['estimated_token_reduction_ratio']:.1%})")
                 print('Character counts and local heuristic token estimates are NOT verified task token/cost savings.')
                 print('Actual API input, cache read/write tokens and billed cost: unavailable')
+    except RecoveryLimitError as exc:
+        parser.exit(2, f'TokenGuard retrieval limit: {exc}\n')
     except (ValueError, OSError) as exc:
         parser.exit(2, f'TokenGuard retrieval/report failed: {type(exc).__name__}\n')
 

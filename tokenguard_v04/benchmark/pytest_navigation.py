@@ -95,6 +95,7 @@ def compare(output: Path) -> Path:
                 initial = summary(event['session_id'], folder.name, source='manual')
             compressed = bool(emitted.strip())
             artifact_exact = None
+            actual_returned_chars = 0
             if compressed:
                 row = initial['records'][0]
                 identifier, cid = row['artifact_id'], row['compression_id']
@@ -112,10 +113,16 @@ def compare(output: Path) -> Path:
                     # grep already returns the needed original line. Requiring
                     # an additional show would inflate compact-mode recovery cost.
                     recovered = found[len(match.group(0)):]
+                    actual_returned_chars = len(found)
                 else:
                     recovered = execute([*cli, 'show', identifier, '--start', str(start), '--count', '1', *owner], env)
+                    actual_returned_chars = len(recovered)
                 original_line = next(line for n, line in enumerate(io.StringIO(case.raw, newline=''), 1) if n == start)
-                require(recovered == original_line and case.query in recovered, 'Selective recovery changed source line')
+                continuation = (f'\n[TokenGuard: retrieval limit reached; next_start_line={start + 1}; '
+                                'next_start_char=0]\n')
+                valid_recovery = recovered == original_line or (
+                    recipe == 'grep' and recovered == original_line + continuation)
+                require(valid_recovery and case.query in original_line, 'Selective recovery changed source line')
             else:
                 require(delivered == case.raw and case.query in delivered, 'Passthrough is not identical')
                 recipe = 'original already visible'
@@ -124,6 +131,8 @@ def compare(output: Path) -> Path:
                 native = summary(event['session_id'], folder.name, source='claude_hook')
                 status = diagnostics(event['session_id'], folder.name)['invocations'][-1]['status']
             require(native['compressions'] == 0, 'Manual probe incorrectly counted as native integration')
+            require(stats['returned_chars'] == actual_returned_chars and
+                    stats['recovery_count'] == int(compressed), 'Recovery audit differs from actual CLI output')
             (root / 'original.txt').write_bytes(case.raw.encode('utf-8'))
             (root / 'delivered.txt').write_bytes(delivered.encode('utf-8'))
             rows.append({'case': case.name, 'mode': mode, 'status': status, 'compressed': compressed,

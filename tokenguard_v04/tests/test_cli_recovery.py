@@ -57,3 +57,22 @@ class TestRecoveryCLI(unittest.TestCase):
         text = 'alpha\r\nbeta\ngamma\rlast'
         identifier = save_original(text)
         self.assertEqual(self.invoke('show', identifier, '--start', '1', '--count', '4'), text.encode('ascii'))
+
+    def test_start_char_is_unicode_offset_for_show_and_grep(self):
+        identifier = save_original('原文😀 first NEEDLE second NEEDLE\r\n')
+        suffix = 'second NEEDLE\r\n'
+        self.assertEqual(self.invoke('show', identifier, '--start-char', '17', '--count', '1'),
+                         suffix.encode('utf-8'))
+        self.assertEqual(self.invoke('grep', identifier, 'NEEDLE', '--start-char', '17', '--context', '0'),
+                         ('1: ' + suffix).encode('utf-8'))
+
+    def test_too_small_match_budget_has_actionable_error_and_no_partial_stdout(self):
+        pattern = 'A' * 199 + 'Z'
+        identifier = save_original('x' * 15000 + pattern + 'y' * 1000)
+        result = subprocess.run([sys.executable, str(Path(__file__).resolve().parents[1] / 'tg.py'),
+                                 'grep', identifier, pattern, '--context', '0', '--max-chars', '150'],
+                                capture_output=True, timeout=15)
+        self.assertEqual(result.returncode, 2)
+        self.assertEqual(result.stdout, b'')
+        self.assertIn(b'max_chars', result.stderr)
+        self.assertNotIn(pattern.encode(), result.stderr)

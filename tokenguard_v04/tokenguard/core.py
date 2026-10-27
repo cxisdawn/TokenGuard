@@ -2,13 +2,22 @@
 import io
 import re
 
-from .pytest_index import PassedIndex
+from .pytest_index import PassedIndex, base_node
 
 PROTECTED = re.compile(r'error|fail|exception|traceback|assert|fatal|denied|critical|^\s*at\s+|^\s*File\s+"', re.I)
 WARNING = re.compile(r'\bwarning\b', re.I)
 ANSI = re.compile(r'\x1b\[[0-?]*[ -/]*[@-~]')
-PYTEST_PASS = re.compile(r'^\s*(?P<node>.+?::.+?)\s+PASSED(?:\s+\[\s*\d+%\])?\s*$')
+PYTEST_PASS = re.compile(r'^(?P<node>\S.*?)' r'[ \t]+PASSED(?:[ \t]+\[[ \t]*\d+%\])?[ \t]*$')
 PYTEST_SUMMARY = re.compile(r'(?m)^\s*(?:=+\s*)?\d+ (?:passed|failed|errors?|skipped|warnings?|deselected|xfailed|xpassed).*\bin \d+(?:\.\d+)?s\b')
+PYTEST_SECTION = re.compile(r'^[ \t]*(?:={3,}|_{3,}|-{3,})')
+PYTEST_START = re.compile(r'^=+[ \t]*test session starts[ \t]*=+$', re.I)
+PYTEST_CAPTURED = re.compile(r'^[ \t]*Captured[ \t]+(?:stdout|stderr|log)\b', re.I)
+PYTEST_DETACHED_STATUS = re.compile(r'^[ \t]*(?:PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)(?:[ \t]|$)')
+PYTEST_RESULT = re.compile(r'^(?P<node>\S.*?)[ \t]+(?:PASSED|FAILED|ERROR|SKIPPED|XFAIL|XPASS)(?:[ \t]|$)')
+# These are conservative hints, not shell parsing: even a quoted option value
+# may cause passthrough. The command does not expose pytest.ini/PYTEST_ADDOPTS.
+PYTEST_LIVE_CAPTURE = re.compile(
+    r'''(?:^|[\s"'=])(?:-[A-Za-z]*s[A-Za-z]*(?=$|[\s"'])|--capture(?:=|[ \t]+)["']?(?:no|tee-sys)(?=$|[\s"']))''')
 TRACEBACK = re.compile(r'Traceback \(most recent call last\)|ExceptionGroup Traceback', re.I)
 DIFF_HEADER = re.compile(r'(?m)^diff (?:--git|--cc|--combined)|^@@|^--- |^\+\+\+ |^GIT binary patch|^Binary files .* differ')
 UNIT_PASS = re.compile(r'^\S+ \([^\n]+\)(?:\s+\.\.\.)? \.\.\. ok\s*$')
@@ -48,25 +57,66 @@ def _rle(text: str, allow_warning: bool = False) -> str:
     return ''.join(result)
 
 
+def _pytest_report_boundary(line: str, seen_progress: bool) -> bool:
+    session_start = PYTEST_START.fullmatch(line) and not seen_progress
+    return bool(DETAIL.search(line) or PYTEST_SUMMARY.match(line) or PYTEST_CAPTURED.match(line)
+                or (PYTEST_SECTION.match(line) and not session_start))
+
+
+def _pytest_ambiguous_progress(clean: str) -> bool:
+    """Reject interleaved live output even when capture flags are hidden.
+
+    Test stdout can replace an interrupted progress node with a fake PASSED
+    line, leaving the apparent pass count correct. A detached status or pending
+    node is evidence that the progress stream cannot be interpreted safely.
+    Report sections are already preserved verbatim by the aggregator.
+    """
+    seen_progress = False
+    for raw_line in io.StringIO(clean, newline=''):
+        line = raw_line.rstrip('\r\n')
+        if _pytest_report_boundary(line, seen_progress):
+            break
+        if PYTEST_DETACHED_STATUS.match(line):
+            return True
+        result = PYTEST_RESULT.match(line)
+        if result and base_node(result.group('node')) is not None:
+            seen_progress = True
+        elif base_node(line.strip()) is not None:
+            return True
+    return False
+
+
 def _aggregate(text: str, matcher: re.Pattern, label: str,
-               inventory: PassedIndex | None = None) -> str:
+               inventory: PassedIndex | None = None, *, pytest_progress: bool = False) -> str:
     result: list[str] = []
     count = 0
     details = False
+    seen_progress = False
     def flush() -> None:
         nonlocal count
         if count:
             result.append(f'[TokenGuard: {count} {label} lines hidden; original retrievable]\n')
             count = 0
-    # The indexed mode uses exactly the universal-newline boundaries used by
-    # artifact recovery, including CRLF/CR. str.splitlines also splits several
-    # control characters, which would give incorrect raw artifact line numbers.
-    lines = io.StringIO(text, newline='') if inventory is not None else text.splitlines(keepends=True)
+    # Use the same physical line boundaries as artifact recovery in every mode.
+    # splitlines() also splits controls such as form-feed, which could turn an
+    # unknown diagnostic fragment into an apparently valid progress record.
+    lines = io.StringIO(text, newline='')
     for number, line in enumerate(lines, 1):
         clean = ANSI.sub('', line).rstrip('\r\n')
         details = details or bool(DETAIL.search(clean))
+        if pytest_progress:
+            # Warnings, captured output, durations, plugin sections and footer
+            # text are not execution progress. Once a section/footer starts,
+            # preserve the entire remaining output, even if it resembles nodes.
+            details = details or _pytest_report_boundary(clean, seen_progress)
+            status = PYTEST_RESULT.match(clean)
+            if status and base_node(status.group('node')) is not None:
+                seen_progress = True
         match = matcher.fullmatch(clean)
+        if pytest_progress and match and base_node(match.group('node')) is None:
+            match = None
         if not details and match:
+            seen_progress = True
             count += 1
             if inventory is not None:
                 inventory.add(match.group('node'), number)
@@ -87,17 +137,18 @@ def compress(text: str, min_chars: int = 3000, max_ratio: float = 0.85,
     if len(text) < min_chars:
         return text, 'below_threshold'
     clean = ANSI.sub('', text)
-    if pytest_mode == 'indexed':
-        # Normalize only for recognition; keep original bytes in the candidate
-        # and artifact. CR-only logs need the same anchors as LF/CRLF logs.
-        clean = clean.replace('\r\n', '\n').replace('\r', '\n')
+    # Normalize only for recognition; keep original bytes in candidates and
+    # artifacts. Protection anchors must work for CR-only output in every mode.
+    clean = clean.replace('\r\n', '\n').replace('\r', '\n')
     if kind == 'git_diff' or DIFF_HEADER.search(clean) or TRACEBACK.search(clean):
         return text, 'protected_diff_or_traceback'
     if kind == 'pytest':
         if not PYTEST_SUMMARY.search(clean):
             return text, 'incomplete_pytest'
+        if PYTEST_LIVE_CAPTURE.search(command) or _pytest_ambiguous_progress(clean):
+            return text, 'ambiguous_pytest_live_output'
         inventory = PassedIndex() if pytest_mode == 'indexed' else None
-        candidate = _aggregate(text, PYTEST_PASS, 'pytest PASSED', inventory)
+        candidate = _aggregate(text, PYTEST_PASS, 'pytest PASSED', inventory, pytest_progress=True)
         strategy = 'pytest_pass_summary'
         if inventory is not None:
             index = inventory.render()

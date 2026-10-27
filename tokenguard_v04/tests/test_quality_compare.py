@@ -12,6 +12,8 @@ import unittest
 from unittest.mock import patch
 
 from tokenguard.experiment import BASE, prepare, write_json
+from tokenguard.visible_tests import fingerprint
+from test_quality_protocol import fixture_receipt, tool_trace
 
 SCRIPT = BASE / 'benchmark/quality_compare.py'
 API = runpy.run_path(str(SCRIPT))
@@ -37,18 +39,21 @@ def synthetic_item(outcomes=(True, False), *, eligible=True):
     return {'record': record, 'plan': plan, 'analysis': {'runs': runs, 'pairs': pairs}}
 
 
-def project_experiment(root: Path, *, max_turns=20) -> Path:
+def project_experiment(root: Path, *, max_turns=20, rounds=1) -> Path:
     project = root / 'project'
     project.mkdir(parents=True)
-    (project / 'value.py').write_text('VALUE = 1\n', encoding='utf-8')
+    (project / 'pylint').mkdir()
+    (project / 'pylint/value.py').write_text('VALUE = 1\n', encoding='utf-8')
     (project / 'test_value.py').write_text('def test_value():\n    assert True\n', encoding='utf-8')
     spec = {'schema_version': 1, 'task_id': 'offline-scorecard', 'provider': 'mock', 'model': 'mock',
-            'prompt': 'SYNTHETIC fixture, no model invocation.', 'files': ['value.py', 'test_value.py'],
-            'editable_files': ['value.py'], 'test_files': ['test_value.py'], 'max_turns': max_turns}
+            'prompt': 'SYNTHETIC fixture, no model invocation.', 'files': ['pylint/value.py', 'test_value.py'],
+            'editable_files': ['pylint/value.py'], 'test_files': ['test_value.py'], 'max_turns': max_turns}
     write_json(root / 'task.json', spec)
-    folder = prepare(project, root / 'task.json', root / 'output', 1, baseline='no_hook')
+    folder = prepare(project, root / 'task.json', root / 'output', rounds, baseline='no_hook')
     write_json(folder / 'quality-plan.json', {'instance_id': 'synthetic-fixture', 'protocol': 'agent_driven',
-                                             'image_id': 'no-real-image'})
+               'image_id': 'no-real-image', 'visible_expected_tests': 1,
+               'required_command': 'python pytest.py',
+               'initial_source_sha256': fingerprint(folder / 'snapshot', ['pylint/value.py'])})
     # Existing derived results must not be rewritten by the new overview.
     for name in ('quality-analysis.json', 'quality-analysis.md', 'quality-report.csv'):
         (folder / name).write_bytes(b'KEEP ORIGINAL DERIVED REPORT\r\n')
@@ -61,7 +66,7 @@ def add_results(folder: Path, *, broken=False) -> None:
         root = folder / 'trials' / trial['trial_id']
         compressed = trial['arm'] == 'optimized'
         row = {**trial, 'task_success': True, 'grade': {'resolved': True, 'evaluation_valid': True, 'tests_status': {}},
-               'source_changes': {'only_allowed_changes': True, 'changed_files': ['value.py']},
+               'source_changes': {'only_allowed_changes': True, 'changed_files': ['pylint/value.py']},
                'agent_exit_code': 0, 'agent_elapsed_ms': 100, 'tool_calls': 1,
                'compression': {'compressions': int(compressed), 'recovery_count': 0, 'saved_chars': 10},
                'protocol_evidence': {'agent_test_protocol_satisfied': True,
@@ -69,11 +74,15 @@ def add_results(folder: Path, *, broken=False) -> None:
                'model_cited_matching_metadata_count': 0, 'cli_aggregate_usage_unverified': {'input_tokens': 10}}
         write_json(root / 'quality-result.json', row)
         guide = '[TokenGuard artifact=' + 'a' * 64 + '; compression_id=' + 'b' * 32 + ']'
-        events = [{'type': 'assistant', 'session_id': trial['session_id'], 'message': {'content': [
-            {'type': 'tool_use', 'id': 't', 'name': 'Bash', 'input': {'command': 'pytest -v'}}]}},
-                  {'type': 'user', 'session_id': trial['session_id'], 'message': {'content': [
-                      {'type': 'tool_result', 'tool_use_id': 't', 'content': guide if compressed else 'NO_RAW_EXPORT'}]}},
-                  {'type': 'result', 'session_id': trial['session_id'], 'subtype': 'success'}]
+        events = []
+        for run_id, key in (('c' * 32, 't'), ('d' * 32, 'last')):
+            _, text = fixture_receipt(root / 'test-receipts', run_id=run_id,
+                source=fingerprint(root / 'worktree', record['task']['editable_files']),
+                session_id=trial['session_id'], experiment_id=record['experiment_id'], image_id='no-real-image')
+            events += tool_trace(run_id, key, text=text + (guide if compressed else 'NO_RAW_EXPORT'))
+        for event in events:
+            event['session_id'] = trial['session_id']
+        events.append({'type': 'result', 'session_id': trial['session_id'], 'subtype': 'success', 'is_error': False})
         text = '\n'.join(json.dumps(e) for e in events) + '\n'
         (root / 'agent.stream.jsonl').write_text(('{broken\n' if broken else '') + text, encoding='utf-8')
         if compressed:
@@ -226,6 +235,97 @@ class TestQualityScorecard(unittest.TestCase):
             output = API['compare']([folder], root / 'scores')
             group = json.loads((output / 'scorecard.json').read_text())['cohorts'][0]
             self.assertEqual(group['compression_evidence_subset']['pairs'], 0)
+
+    def test_cached_native_protocol_success_cannot_replace_current_receipts(self):
+        for damage in ('missing', 'tampered', 'wrong_source'):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                folder = project_experiment(root / 'experiment')
+                add_results(folder)
+                trial = folder / 'trials/001-optimized'
+                receipt = trial / 'test-receipts' / ('d' * 32 + '.json')
+                if damage == 'missing':
+                    receipt.unlink()
+                elif damage == 'tampered':
+                    receipt.with_suffix('.stdout.txt').write_bytes(b'changed evidence')
+                else:
+                    (trial / 'worktree/pylint/value.py').write_text('VALUE = 2\n')
+                items, _ = API['collect']([folder])
+                group = API['scorecard'](items)['cohorts'][0]
+                self.assertEqual(group['all_planned_code_outcomes']['both_resolved'], 1)
+                self.assertEqual(group['compression_evidence_subset']['pairs'], 0)
+                self.assertFalse(items[0]['analysis']['runs'][1]['test_protocol_satisfied'])
+
+    def test_current_baseline_compression_cannot_be_hidden_by_cached_zero(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = project_experiment(Path(temporary))
+            add_results(folder)
+            record = json.loads((folder / 'experiment.json').read_text())
+            trial = record['trials'][0]
+            root = folder / 'trials' / trial['trial_id']
+            guide = '[TokenGuard artifact=' + 'a' * 64 + '; compression_id=' + 'b' * 32 + ']'
+            stream = root / 'agent.stream.jsonl'
+            stream.write_text(stream.read_text().replace('NO_RAW_EXPORT', guide))
+            (root / 'tg-data').mkdir()
+            (root / 'tg-data/audit-v04.jsonl').write_text(json.dumps({
+                'event': 'compression', 'source': 'claude_hook', 'session_id': trial['session_id'],
+                'experiment_id': record['experiment_id'], 'tool_use_id': 't',
+                'artifact_id': 'a' * 64, 'compression_id': 'b' * 32}) + '\n')
+            items, _ = API['collect']([folder])
+            self.assertEqual(items[0]['analysis']['runs'][0]['compressions'], 0)
+            self.assertEqual(items[0]['analysis']['runs'][0]['native_compressions_in_matching_bash_results'], 1)
+            group = API['scorecard'](items)['cohorts'][0]
+            self.assertEqual(group['compression_evidence_subset']['pairs'], 0)
+            self.assertIn('baseline_compression_contamination', group['pairs'][0]['missing_evidence'])
+
+    def test_configuration_and_all_snapshot_inputs_cannot_change_during_collection(self):
+        for name in ('task.json', 'settings.json', 'no-hook-settings.json', 'mcp.json',
+                     'official-instance.json', 'snapshot/test_value.py'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                folder = project_experiment(Path(temporary))
+                add_results(folder)
+                globals_ = API['collect'].__globals__
+                original = globals_['analyze']
+                def mutate(path, **kwargs):
+                    result = original(path, **kwargs)
+                    (path / name).write_bytes(b'{"changed":true}')
+                    return result
+                with patch.dict(globals_, {'analyze': mutate}):
+                    with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                        API['collect']([folder])
+
+    def test_change_after_initial_validation_before_hash_snapshot_is_rejected(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = project_experiment(Path(temporary))
+            add_results(folder)
+            globals_ = API['collect'].__globals__
+            original = globals_['load_experiment']
+            def mutate(path):
+                result = original(path)
+                (path / 'no-hook-settings.json').write_bytes(b'{"changed":true}')
+                return result
+            with patch.dict(globals_, {'load_experiment': mutate}):
+                with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                    API['collect']([folder])
+
+    def test_receipt_and_source_changes_during_analysis_abort_collection(self):
+        for relative in ('test-receipts/' + 'd' * 32 + '.json',
+                         'test-receipts/' + 'd' * 32 + '.stdout.txt',
+                         'test-receipts/' + 'd' * 32 + '.stderr.txt',
+                         'worktree/pylint/value.py', 'test-receipts/' + 'e' * 32 + '.json'):
+            with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                folder = project_experiment(root / 'experiment')
+                add_results(folder)
+                globals_ = API['collect'].__globals__
+                original = globals_['analyze']
+                def mutate(path, **kwargs):
+                    result = original(path, **kwargs)
+                    (path / 'trials/001-optimized' / relative).write_bytes(b'changed evidence')
+                    return result
+                with patch.dict(globals_, {'analyze': mutate}):
+                    with self.assertRaisesRegex(ValueError, 'changed while reading'):
+                        API['collect']([folder])
 
     def test_output_cannot_be_written_inside_input_and_mid_read_changes_abort(self):
         with tempfile.TemporaryDirectory() as temporary:

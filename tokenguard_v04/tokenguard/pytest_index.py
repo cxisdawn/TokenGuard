@@ -8,6 +8,33 @@ MAX_NODES = 32
 MAX_INDEX_CHARS = 2400
 
 
+def base_node(node: str) -> str | None:
+    """Recognize a Python test node without interpreting its parameter contents.
+
+    Parameter IDs can contain ``::`` and brackets. Splitting from the right
+    therefore confuses a parameter value with a test/class name. Python node
+    components are identifiers; plugin-specific or ambiguous names stay visible
+    instead of being assigned a guessed base node.
+    """
+    path, separator, tail = node.partition('::')
+    if not separator or not path.endswith('.py') or path != path.strip():
+        return None
+    if any(ord(char) < 32 or ord(char) == 127 for char in path):
+        return None
+    # A drive-letter prefix is a valid Windows path. Other colons commonly
+    # indicate a warning location/message, not a pytest node identifier.
+    colon_free = path[2:] if len(path) > 2 and path[0].isalpha() and path[1] == ':' else path
+    if ':' in colon_free:
+        return None
+    names, opening, parameters = tail.partition('[')
+    if opening and (not parameters.endswith(']') or ']::' in parameters):
+        return None
+    components = names.split('::')
+    if not all(component.isidentifier() for component in components):
+        return None
+    return path + '::' + names
+
+
 @dataclass
 class PassedNode:
     first_line: int
@@ -30,10 +57,9 @@ class PassedIndex:
     def add(self, node: str, line: int) -> None:
         if self.overflow:
             return
-        # Only strip a parameter suffix from the final node component, never
-        # from a filename/class containing '['.
-        parent, _, leaf = node.rpartition('::')
-        name = parent + '::' + leaf.partition('[')[0]
+        # The compressor supplies recognized nodes. Direct callers with custom
+        # names retain the complete name; guessing would discard information.
+        name = base_node(node) or node
         if name in self.nodes:
             row = self.nodes[name]
             row.last_line = line

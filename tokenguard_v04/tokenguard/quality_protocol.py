@@ -84,6 +84,9 @@ def receipt(path: Path, session: str, experiment: str) -> dict:
             row.get('schema') != 'tokenguard.visible-test/v1', row.get('run_id') != run_id,
             row.get('session_id') != session, row.get('experiment_id') != experiment)):
         raise ValueError('Receipt scope mismatch')
+    if (type(row.get('exit_code')) is not int or
+            any(type(row.get(key)) is not bool for key in ('timed_out', 'outputs_truncated'))):
+        raise ValueError('Receipt execution outcome missing or invalid')
     for kind in ('stdout', 'stderr'):
         raw = read_bytes(path.with_suffix('.' + kind + '.txt'))
         if hashlib.sha256(raw).hexdigest() != row.get(kind + '_sha256') or len(raw) != row.get(kind + '_bytes'):
@@ -131,8 +134,8 @@ def evidence(events: list[dict], audits: list[dict], receipt_dir: Path, *, sessi
                 count = pytest_test_count(stdout)
                 summary = count > 0 and (expected_tests is None or count == expected_tests)
                 stable = row.get('source_before') == row.get('source_after')
-                complete = (row.get('exit_code') in (0, 1) and not row.get('timed_out') and
-                            not row.get('outputs_truncated') and row.get('full_suite_requested') is True and
+                complete = (row['exit_code'] in (0, 1) and row['timed_out'] is False and
+                            row['outputs_truncated'] is False and row.get('full_suite_requested') is True and
                             row.get('arguments') == [] and stable and summary)
                 verified.append({'run_id': row['run_id'], 'exit_code': row['exit_code'],
                                  'complete_full_suite': complete,
@@ -196,7 +199,9 @@ def pair_assessment(baseline: dict, optimized: dict, protocol: str) -> dict:
                 reasons.append(arm + '_test_protocol_not_verified')
     if not exposure:
         reasons.append('compression_not_observed')
-    if baseline.get('compression', {}).get('compressions', 0):
+    baseline_visible = baseline.get('protocol_evidence', {}).get('native_compressions_in_matching_bash_results')
+    if (baseline.get('compression', {}).get('compressions', 0) or
+            (type(baseline_visible) is int and baseline_visible > 0)):
         reasons.append('baseline_compression_contamination')
     valid = not reasons
     return {'protocol': protocol, 'comparison_evidence_satisfied': valid, 'compression_exposed': exposure,

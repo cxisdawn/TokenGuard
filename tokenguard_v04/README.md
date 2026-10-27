@@ -1,8 +1,8 @@
 ﻿# TokenGuard v0.4
 
-????? [pytest ???????????](PYTEST_NAVIGATION.md)?`-PytestMode indexed` ????????????????????????? `compact`?`off` ??? pytest ???????????????????????
+pytest 提供 [compact / indexed / off 三种模式](PYTEST_NAVIGATION.md)：默认 `compact`；`-PytestMode indexed` 保留有界测试名称索引；`off` 关闭 pytest 压缩。
 
-????????? [QUALITY_PILOT_RESULTS.md](QUALITY_PILOT_RESULTS.md)?2026-10-23 ????????????????????????????????????????????????????????????
+最近一次受控日志真实 A/B 中，基线完成修复，优化组未完成且引入回归；不能宣称编码能力无损，见 [原始实验结果](QUALITY_PILOT_RESULTS.md)。新增 [语义、恢复与证据验证](SAFETY_VALIDATION.md) 使用真实本地 pytest 输出和故障注入，不追加付费模型调用。
 
 当前版本说明；项目概览和环境创建步骤见[根 README](../README.md)。
 
@@ -28,7 +28,7 @@ $env:TOKENGUARD_ENABLED = '0'
 
 |日志|策略与限制|
 |---|---|
-|pytest -v|命令和完成汇总匹配后聚合 PASSED；保留 FAILED/ERROR/SKIPPED/XFAIL/XPASS、未知行和汇总；失败详情区不匹配成功行|
+|pytest -v|命令和完成汇总匹配后聚合可信 Python 节点的 PASSED；保留其他状态、未知行和汇总；警告、捕获输出及报告段不聚合；实时输出歧义时整段透传|
 |unittest -v|需 Ran 汇总及 OK/FAILED；仅聚合标准成功行；常见 unittest 默认写 stderr，Hook 对 stderr 原样保留|
 |构建/重复警告|仅折叠相邻完全相同的非严重行；保留首条、次数和错误行|
 |pip install|仅聚合明确进度条，保留版本、安装结果、resolver 与未知内容|
@@ -67,13 +67,15 @@ $Id = 'ARTIFACT_SHA256'
 $CompressionId = 'COMPRESSION_ID'
 & $Python .\tg.py grep $Id 'FAILED' --context 2 --limit 10 --compression-id $CompressionId
 & $Python .\tg.py show $Id --start 30 --end 60 --max-chars 6000 --compression-id $CompressionId
+# 超长行续读：同时使用上次响应中的行号和行内字符游标。
+& $Python .\tg.py show $Id --start 30 --start-char 15000 --count 1 --max-chars 2000 --compression-id $CompressionId
 & $Python .\tg.py grep $Id 'FAILED' --start 100000 --end 100200 --context 2 --compression-id $CompressionId
 & $Python .\tg.py index $Id
 ```
 
-关键词为 1..200 字符的大小写不敏感字面值；上下文 0..5 行、命中 1..50、show 1..100 行；单次返回最多 12000 字符，内容扫描最多 8 Mi 字符加探测字符。范围关键词查询的上下文也限制在该区间。超限返回限制标记和续读行号，不能解释为无匹配。
+关键词为 1..200 字符的大小写不敏感字面值；上下文 0..5 行、命中 1..50、show 1..100 行；单次返回最多 12000 字符，内容扫描最多 8 Mi 字符加探测字符。范围关键词查询的上下文也限制在该区间。截断提示提供 `next_start_line` 和 `next_start_char`，续读必须同时使用。行从 1 开始，行内字符从 0 开始，按 Unicode 字符而非 UTF-8 字节计数。预算不足以放下完整匹配和提示时明确失败，不能解释为无匹配。
 
-start>1 时按需构建/复用稀疏字节偏移索引，支持 UTF-8、LF/CRLF/CR 及无末尾换行。首次构建需完整顺序读取，成本单独计入 index_build_bytes；随后从目标附近读取。索引损坏/过期重建，不可写时回退，`TOKENGUARD_INDEX_ENABLED=0` 可关闭自动索引。显式 `index --rebuild` 只重建 sidecar，不改原文。单条超长行仍受预算限制，但其后行可直接定位。
+后续行或长行内部定位时按需构建/复用稀疏偏移索引，支持 UTF-8、LF/CRLF/CR 及无末尾换行。首次构建需完整顺序读取，成本单列为 index_build_bytes；随后从目标附近读取。旧版、损坏或过期索引自动重建，`TOKENGUARD_INDEX_ENABLED=0` 可关闭自动索引。关闭或不可写时回退有界扫描；预算内到不了请求位置会明确失败，不无限扫描。显式 `index --rebuild` 只重建 sidecar，不改原文。长行可以分段恢复，grep 返回含完整关键词的窗口；省略上下文时有明确提示。
 
 ID 严格限制为小写 SHA256，拒绝符号链接/路径逃逸。原文原子写入、保留 UTF-8 字节；不会删除历史 Artifact。数据目录视为可信本地用户目录，不防御可同时篡改源文件和指纹的恶意进程。原日志可能包含私密内容，不要公开上传该目录。
 
