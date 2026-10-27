@@ -6,6 +6,19 @@ from tokenguard.storage import read_lines, grep_lines, RecoveryLimitError
 from tokenguard.audit import summary, diagnostics
 
 
+def _record_limit(value: str) -> int:
+    result = int(value)
+    if not 0 <= result <= 100:
+        raise argparse.ArgumentTypeError('record limit must be 0..100')
+    return result
+
+
+def _measured(value: int | float | None, *, decimals: int | None = None) -> str:
+    if value is None:
+        return 'unavailable'
+    return str(value) if decimals is None else f'{value:.{decimals}f}'
+
+
 def main() -> None:
     # Recovery is a UTF-8 data boundary. Windows newline translation would turn
     # stored CRLF into CRCRLF and make emitted character counts differ from audit.
@@ -38,6 +51,9 @@ def main() -> None:
     p = sub.add_parser('stats')
     p.add_argument('--session')
     p.add_argument('--experiment')
+    p.add_argument('--source', choices=['manual', 'mock', 'claude_hook', 'unverified_hook'])
+    p.add_argument('--limit-records', type=_record_limit, default=20,
+                   help='recent compression records in JSON (0..100); aggregates still cover the full scope')
     p.add_argument('--json', action='store_true')
     p = sub.add_parser('diagnostics')
     p.add_argument('--session')
@@ -97,15 +113,25 @@ def main() -> None:
                 parser.exit(1)
 
         else:
-            result = summary(args.session, args.experiment)
+            result = summary(args.session, args.experiment, source=args.source, record_limit=args.limit_records)
             if args.json:
-                print(json.dumps(result, indent=2, ensure_ascii=True))
+                print(json.dumps(result, indent=2, ensure_ascii=True, allow_nan=False))
             else:
-                print(f"Scope: {result['scope']}; session={args.session}; experiment={args.experiment}")
-                print(f"Compressed outputs: {result['compressions']}; characters saved: {result['saved_chars']} ({result['character_reduction_ratio']:.1%})")
-                print(f"Recoveries: {result['recovery_count']}; returned characters: {result['returned_chars']}; scanned characters: {result['scanned_chars']}")
-                print(f"Indexed recoveries: {result['indexed_recoveries']}; index construction bytes: {result['index_build_bytes']}; recovery latency ms: {result['recovery_latency_ms']:.3f}")
-                print(f"Uncalibrated local estimate, compressed outputs only: {result['estimated_original_tokens']} -> {result['estimated_optimized_tokens']} tokens ({result['estimated_token_reduction_ratio']:.1%})")
+                print(f"Scope: {result['scope']}; session={args.session}; experiment={args.experiment}; source={args.source}")
+                if not result['data_available']:
+                    print('Audit INCOMPLETE: valid observations below are partial totals; '
+                          f"malformed={result['malformed_rows']}; invalid={result['invalid_rows']}; "
+                          f"duplicates={result['duplicate_rows']}; conflicts={result['conflicting_rows']}")
+                print(f"Prepared candidates: {result['prepared_candidates']}; candidate characters saved: {result['saved_chars']} ({result['character_reduction_ratio']:.1%})")
+                print(f"Delivery: stdout succeeded: {result['confirmed_stdout_deliveries']}; failed: {result['delivery_failures']}; unknown: {result['delivery_unknown']}; host acceptance unverified")
+                print(f"Recoveries: {result['recovery_count']}; returned characters: {result['returned_chars']}; scanned characters: {_measured(result['scanned_chars'])}")
+                print(f"Indexed recoveries: {_measured(result['indexed_recoveries'])}; index construction bytes: {_measured(result['index_build_bytes'])}; recovery latency ms: {_measured(result['recovery_latency_ms'], decimals=3)}")
+                if result['estimated_token_reduction_ratio'] is None:
+                    coverage = result['token_estimate_coverage']
+                    print('Uncalibrated local estimate: unavailable; '
+                          f"complete estimates: {coverage['complete_records']}/{coverage['total_records']} candidates")
+                else:
+                    print(f"Uncalibrated local estimate, prepared candidates only: {result['estimated_original_tokens']} -> {result['estimated_optimized_tokens']} tokens ({result['estimated_token_reduction_ratio']:.1%})")
                 print('Character counts and local heuristic token estimates are NOT verified task token/cost savings.')
                 print('Actual API input, cache read/write tokens and billed cost: unavailable')
     except RecoveryLimitError as exc:

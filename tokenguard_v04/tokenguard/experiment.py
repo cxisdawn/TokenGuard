@@ -197,13 +197,21 @@ def execute(folder: Path, driver: str = 'mock', execute_run: bool = False,
             agent_version=version['stdout'].strip()
         write_json(folder/'started.json',{'driver':driver,'timestamp':audit.timestamp()})
         write_json(folder/'runtime.json',{'agent_version':agent_version,'driver':driver})
+        completed = 0
         for trial in record['trials']:
-            _run_trial(folder,record,trial,driver,executable,agent_version)
-    return {'dry_run':False,'driver':driver,'completed_trials':len(record['trials']),
+            result = _run_trial(folder,record,trial,driver,executable,agent_version)
+            completed += 1
+            if result['stage_errors']:
+                write_json(folder/'execution-stopped.json', {
+                    'trial_id': trial['trial_id'], 'timestamp': audit.timestamp(),
+                    'stage_errors': result['stage_errors'],
+                    'reason': 'Local evidence unavailable; no further sessions launched; no automatic retry'})
+                break
+    return {'dry_run':False,'driver':driver,'completed_trials':completed,'planned_trials':len(record['trials']),
             'report':str(folder/'report.json')}
 
 
-def _run_trial(folder: Path, record: dict, trial: dict, driver: str, executable: str, version: str) -> None:
+def _run_trial(folder: Path, record: dict, trial: dict, driver: str, executable: str, version: str) -> dict:
     started=time.perf_counter()
     root=folder/'trials'/trial['trial_id']
     spec=record['task']
@@ -257,17 +265,29 @@ def _run_trial(folder: Path, record: dict, trial: dict, driver: str, executable:
     after=validate(folder/'snapshot',root/'worktree',spec,root/'final-validation')
     success=(baseline_ok and result['exit_code']==0 and not result['timed_out'] and error is None
              and response.get('is_error') is False and after['passed'] and check['only_allowed_changes'])
-    with audit_scope(root/'tg-data'):
-        stats=audit.summary(trial['session_id'],record['experiment_id'])
-        diagnostics=audit.diagnostics(trial['session_id'],record['experiment_id'],limit=100)
+    stage_errors = []
+    stats = {'data_available': False, 'compressions': None, 'recovery_count': None,
+             'saved_chars': None, 'counts_status': 'unavailable', 'records': []}
+    diagnostics = {'matching_invocations': None, 'data_available': False}
+    try:
+        with audit_scope(root/'tg-data'):
+            stats=audit.summary(trial['session_id'],record['experiment_id'])
+            diagnostics=audit.diagnostics(trial['session_id'],record['experiment_id'],limit=100)
+        if any(value.get('data_available', True) is not True for value in (stats, diagnostics)):
+            stage_errors.append({'stage': 'audit', 'type': 'AuditIntegrityError'})
+    except Exception as exc:
+        stats = {**stats, 'data_available': False}
+        stage_errors.append({'stage': 'audit', 'type': type(exc).__name__})
     row={**trial,'driver':driver,'agent_version':version,'fresh_session':True,
          'baseline_mode':baseline_mode(record['config']),'hook_mode':hook_mode(record,trial),**metrics,
-         'task_success':success,'tests_passed':after['passed'],
+         'task_success':success and not stage_errors,'tests_passed':after['passed'],
          'tests_unchanged':not check['protected_files_changed'],
          'initial_validation':before,'final_validation':after,'source_changes':check,
          'elapsed_ms':result['elapsed_ms'],'agent_exit_code':result['exit_code'],
          'total_execution_ms':round((time.perf_counter()-started)*1000),
          'timed_out':result['timed_out'],'execution_error':error,
+         'execution_status':'infrastructure_failed' if stage_errors else 'completed',
+         'stage_errors':stage_errors,
          'tool_calls':2 if driver=='mock' and success else None,
          'bash_hook_invocations':diagnostics['matching_invocations'],
          'compression':{k:v for k,v in stats.items() if k!='records'},
@@ -275,6 +295,7 @@ def _run_trial(folder: Path, record: dict, trial: dict, driver: str, executable:
          'execution_provenance':'controller-produced local record; not tamper-proof certification',
          'model_visibility':'fixture adapter only' if driver=='mock' else 'not independently verified'}
     write_json(root/'result.json',row)
+    return row
 
 
 def attach_usage(folder: Path, trial_id: str, source: Path, format_name: str, evidence: str,

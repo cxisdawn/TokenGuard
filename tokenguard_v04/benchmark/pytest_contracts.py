@@ -252,9 +252,10 @@ def compare(output: Path, implementation: Path = BASE) -> Path:
     implementation = implementation.resolve()
     folder = output.resolve() / ("pytest-contracts-" + uuid.uuid4().hex)
     folder.mkdir(parents=True, exist_ok=False)
-    sources = ["tokenguard/core.py", "tokenguard/pytest_index.py", "tokenguard/hook.py",
-               "tokenguard/storage.py", "tokenguard/line_index.py", "tokenguard/audit.py",
-               "tokenguard/tokens.py", "tokenguard/__init__.py", "tg.py"]
+    # Capture new transitive modules as well as older implementation layouts.
+    # Historical versions need not contain today's audit_schema.py.
+    sources = [path.relative_to(implementation).as_posix()
+               for path in sorted((implementation / 'tokenguard').glob('*.py'))] + ['tg.py']
     input_errors = []
     try:
         hashes = {name: hashlib.sha256((implementation / name).read_bytes()).hexdigest() for name in sources}

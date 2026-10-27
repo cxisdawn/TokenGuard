@@ -2,6 +2,11 @@
 
 ## v0.4
 
+- Validate audit rows before arithmetic or attribution; retain corrupt history, expose incomplete/unknown measurements and bound CLI record output.
+- Serialize appenders with timed OS locks, preserve truncated tails with a new boundary, and deduplicate only explicit event identities.
+- Separate prepared compression candidates from successful stdout writes and unknown host acceptance; handle strict JSON, short writes and broken pipes.
+- Preserve independent code grades while stopping subsequent trials after incomplete audit evidence; revalidate historical audit instead of trusting cached completeness.
+
 - Replace duplicate managed v0.4 hooks when reinstalling from a different checkout; preserve byte-identical configuration backups and unrelated settings.
 - Match complete installer command serialization and arguments before migrating/uninstalling; preserve unknown arguments, shell expressions and other hook types/versions.
 - Add 19 installation migration and command-ownership regression cases, including Windows/POSIX paths and missing old checkout files.

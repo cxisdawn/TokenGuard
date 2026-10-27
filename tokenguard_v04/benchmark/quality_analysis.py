@@ -9,6 +9,8 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+from tokenguard import audit
+from tokenguard.experiment import audit_scope
 from tokenguard.quality_protocol import evidence, pair_assessment, read_bytes, text_blocks, trace_tools
 from tokenguard.visible_tests import fingerprint
 
@@ -103,6 +105,57 @@ def read_rows(path: Path, errors: list[str] | None = None) -> list[dict]:
             errors.append(path.name + ':row_limit')
             break
     return rows
+
+
+def current_audit_integrity(root: Path, trial: dict, record: dict, compression: dict,
+                            seed: dict, errors: list[str]) -> bool:
+    """Cached totals cannot make damaged current audit evidence complete."""
+    path = root / 'tg-data/audit-v04.jsonl'
+    valid = True
+    diagnostic_path = path.with_name('diagnostics-v04.jsonl')
+    try:
+        with audit_scope(path.parent):
+            diagnostic = audit.diagnostics(trial['session_id'], record['experiment_id'], limit=1)
+        if diagnostic['data_available'] is not True:
+            errors.append(diagnostic_path.name + ':integrity_incomplete')
+            valid = False
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        errors.append(diagnostic_path.name + ':' + type(exc).__name__)
+        valid = False
+    if seed.get('data_available', True) is not True:
+        errors.append(path.name + ':cached_seed_unavailable')
+        valid = False
+    if any(error.startswith(path.name + ':') for error in errors):
+        return False
+    if not path.exists():
+        # No audit file is expected for a clean zero-compression baseline.
+        if any((count(value.get('compressions')) or 0) > 0 or
+               (count(value.get('recovery_count')) or 0) > 0 for value in (compression, seed)):
+            errors.append(path.name + ':missing_observed_records')
+            return False
+        return valid
+    try:
+        with audit_scope(path.parent):
+            current = audit.summary(trial['session_id'], record['experiment_id'],
+                                    source='claude_hook', record_limit=0)
+            current_seed = audit.summary(trial['session_id'], record['experiment_id'],
+                                         source='manual', record_limit=0)
+        if any(value['data_available'] is not True for value in (current, current_seed)):
+            errors.append(path.name + ':integrity_incomplete')
+            return False
+        if any(count(compression.get(key)) is not None and compression[key] != current[key]
+               for key in ('compressions', 'recovery_count')):
+            errors.append(path.name + ':cached_counts_differ')
+            valid = False
+        if any((count(seed.get(key)) is not None and seed[key] != current_seed[key]) or
+               (count(seed.get(key)) is None and current_seed[key] > 0)
+               for key in ('compressions', 'recovery_count')):
+            errors.append(path.name + ':cached_seed_counts_differ')
+            valid = False
+        return valid
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        errors.append(path.name + ':' + type(exc).__name__)
+        return False
 
 
 def analyze(folder: Path, *, write: bool = True) -> dict:
@@ -208,8 +261,11 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
         allowed = source.get('only_allowed_changes') is True
         resolved = grade.get('resolved') if evaluation_valid and allowed else None
         compression, seed = mapping(row.get('compression')), mapping(row.get('seed_compression'))
-        available = (compression.get('data_available', True) is True and
+        audit_valid = current_audit_integrity(root, trial, record, compression, seed, analysis_errors)
+        available = (audit_valid and compression.get('data_available', True) is True and
                      all(count(compression.get(k)) is not None for k in ('compressions', 'recovery_count')))
+        seed_available = (audit_valid and seed.get('data_available', True) is True and
+                          all(count(seed.get(k)) is not None for k in ('compressions', 'recovery_count')))
         success = None
         if resolved is not None:
             if (resolved is False or row.get('task_success') is False or row.get('stage_errors') or
@@ -226,6 +282,7 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                           'grade': {'evaluation_valid': evaluation_valid, 'resolved': resolved},
                           'source_changes': {'only_allowed_changes': allowed},
                           'compression': {**compression, 'data_available': available},
+                          'seed_compression': {**seed, 'data_available': seed_available},
                           'protocol_evidence': observed, 'seed_delivery': mapping(row.get('seed_delivery'))})
         runs.append({**trial, 'state': 'completed', 'code_resolved': resolved,
                      'evaluation_valid': evaluation_valid,
@@ -233,6 +290,7 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                      'stage_errors': row.get('stage_errors', []),
                      'analysis_evidence_errors': analysis_errors,
                      'compression_data_available': available,
+                     'seed_data_available': seed_available,
                      'task_completed_and_valid': success,
                      'agent_end_reason': final.get('subtype', row.get('execution_error') or 'unknown'),
                      'agent_exit_code': row.get('agent_exit_code'),
@@ -252,8 +310,8 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                      'test_protocol_satisfied': observed['agent_test_protocol_satisfied'],
                      'protocol_evidence_rechecked': observed['evidence_available'],
                      'native_compressions_in_matching_bash_results': len(matched_native) if not stream_errors else None,
-                     'seed_compressions': count(seed.get('compressions')) if seed.get('data_available', True) is True else None,
-                     'seed_recoveries': count(seed.get('recovery_count')) if seed.get('data_available', True) is True else None,
+                     'seed_compressions': count(seed.get('compressions')) if seed_available else None,
+                     'seed_recoveries': count(seed.get('recovery_count')) if seed_available else None,
                      'seed_original_stdout_sha256': mapping(row.get('seed_delivery')).get('original_stdout_sha256'),
                      'seed_delivered_prompt_sha256': mapping(row.get('seed_delivery')).get('prompt_sha256'),
                      'cli_aggregate_usage_unverified': mapping(row.get('cli_aggregate_usage_unverified'))})
@@ -280,6 +338,7 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                         'blocked_before_launch': sum(r['state'] == 'blocked_before_launch' for r in own),
                         'analysis_evidence_incomplete': sum(bool(r.get('analysis_evidence_errors')) for r in own),
                         'compression_data_complete': len(done) == len(own) and all(r['compression_data_available'] for r in done),
+                        'seed_data_complete': len(done) == len(own) and all(r['seed_data_available'] for r in done),
                         'recoveries': sum(known_recoveries) if known_recoveries else None,
                         'recovery_measurements': len(known_recoveries)}
     pairs = []

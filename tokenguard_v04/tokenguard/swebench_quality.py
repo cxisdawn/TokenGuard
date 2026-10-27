@@ -516,8 +516,16 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
                     seed_stats = audit.summary(trial['session_id'], record['experiment_id'], source='manual')
                     audit_rows, _ = audit.events()
                     diagnostics = audit.diagnostics(trial['session_id'], record['experiment_id'], limit=100)
+                # A tolerant reader retains valid observations from damaged logs.
+                # They remain useful, but cannot certify a complete comparison.
+                if any(value.get('data_available', True) is not True
+                       for value in (stats, seed_stats, diagnostics)):
+                    stage_errors.append({'stage': 'audit', 'type': 'AuditIntegrityError'})
             except Exception as exc:
-                stats, seed_stats = unavailable_compression(), unavailable_compression()
+                # Keep any observations already collected before a later I/O
+                # failure, while withdrawing their completeness claim.
+                stats = {**stats, 'data_available': False}
+                seed_stats = {**seed_stats, 'data_available': False}
                 stage_errors.append({'stage': 'audit', 'type': type(exc).__name__})
             observed = {'agent_test_protocol_satisfied': False, 'final_test_command_observed': False,
                         'native_compressions_in_matching_bash_results': 0, 'evidence_available': False}
@@ -530,7 +538,9 @@ def execute_quality(folder: Path, *, execute: bool = False, allow_paid: bool = F
                                     expected_tests=plan['visible_expected_tests'])
             except Exception as exc:
                 stage_errors.append({'stage': 'evidence', 'type': type(exc).__name__})
-            citations = [r for r in stats['records'] if r['artifact_id'] in str(response.get('result', '')) and
+            citations = [r for r in stats['records']
+                         if isinstance(r.get('artifact_id'), str) and isinstance(r.get('compression_id'), str) and
+                         r['artifact_id'] in str(response.get('result', '')) and
                          r['compression_id'] in str(response.get('result', ''))]
             success = (run['exit_code'] == 0 and not run['timed_out'] and not run['outputs_truncated'] and
                        error is None and response.get('is_error') is False and grade['resolved'] and

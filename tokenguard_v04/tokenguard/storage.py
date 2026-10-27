@@ -7,7 +7,7 @@ import time
 from collections import deque
 from dataclasses import dataclass
 from pathlib import Path
-from .audit import append, events, root_dir
+from .audit import append, recovery_owner, root_dir
 from .line_index import ensure_index, Position, _fingerprint, _same_file_state
 
 ID_RE = re.compile(r'^[0-9a-f]{64}$')
@@ -135,7 +135,7 @@ def _bounded_result(pieces: list[_Piece], maximum: int,
 def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
              pattern: str = '', context: int = 1, limit: int = 20,
              max_chars: int = MAX_CHARS, compression_id: str | None = None,
-             session_id: str | None = None, end: int | None = None,
+             session_id: str | None = None, experiment_id: str | None = None, end: int | None = None,
              char_offset: int = 0) -> str:
     if not 1 <= max_chars <= MAX_CHARS:
         raise ValueError(f'max_chars must be 1..{MAX_CHARS}')
@@ -143,13 +143,7 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
         raise ValueError('start >= 1; char_offset >= 0; end >= start required')
     started = time.perf_counter()
     path = artifact_path(identifier)
-    records, _ = events()
-    candidates = [r for r in records if r.get('event') == 'compression' and r.get('artifact_id') == identifier
-                  and (compression_id is None or r.get('compression_id') == compression_id)
-                  and (session_id is None or r.get('session_id') == session_id)]
-    if (compression_id or session_id) and len(candidates) != 1:
-        raise ValueError('Recovery requires one matching compression; pass --compression-id')
-    owner = candidates[0] if len(candidates) == 1 else {}
+    owner = recovery_owner(identifier, compression_id, session_id, experiment_id)
     # Ambiguous shared artifacts remain readable, but are never attributed to a guessed session.
     scanned = emitted = matches = tail = 0
     pieces: list[_Piece] = []

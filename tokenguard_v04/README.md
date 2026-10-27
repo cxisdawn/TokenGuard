@@ -37,7 +37,7 @@ v0.1–v0.3 Hook 不会被自动删除。若同项目仍有 v0.3 条目，应先
 |文件搜索|只对明确文件名列表压缩，内容搜索和未知格式不截断|
 |Git diff / Traceback|保守全局透传|
 
-Hook 复制工具响应，只修改 stdout，保留 stderr、图像/中断和额外字段。压缩、存储或审计异常时不返回替换 JSON。stdout 以外结构不匹配则透传。
+Hook 复制工具响应，只修改 stdout，保留 stderr、图像/中断和额外字段。写出前的压缩、存储或候选审计异常不返回替换 JSON；stdout 已部分写出后无法撤回，失败记录与交付未知状态另行报告。stdout 以外结构不匹配则透传。
 
 ## 离线安装链路自检
 
@@ -49,11 +49,14 @@ doctor 只读已注册的项目 Hook，验证解释器和脚本路径，在临�
 
 ## 诊断和统计
 
+审计坏行、无效计量和身份冲突会明确标为不完整；候选生成、stdout 写入及宿主消费分别验证。完整规则及故障复现见 [审计完整性与 Hook 输出验证](AUDIT_RELIABILITY.md)。
+
 ```powershell
 & $Python .\tg.py diagnostics --limit 5
 & $Python .\tg.py diagnostics --session 'SESSION_ID' --limit 5
 & $Python .\tg.py stats --session 'SESSION_ID' --json
 & $Python .\tg.py stats --experiment 'EXPERIMENT_ID' --json
+& $Python .\tg.py stats --session 'SESSION_ID' --source claude_hook --limit-records 5 --json
 ```
 
 将占位符替换为实际 ID。诊断需要调用进程 `TOKENGUARD_DIAGNOSTICS=1`，旧记录不会自动补写新字段。没有新诊断不等于没有压缩，请同时查看审计统计。`below_threshold` 只表示该次 stdout 少于门槛。
@@ -81,7 +84,7 @@ $CompressionId = 'COMPRESSION_ID'
 
 ID 严格限制为小写 SHA256，拒绝符号链接/路径逃逸。原文原子写入、保留 UTF-8 字节；不会删除历史 Artifact。数据目录视为可信本地用户目录，不防御可同时篡改源文件和指纹的恶意进程。原日志可能包含私密内容，不要公开上传该目录。
 
-恢复按 compression_id 关联，累计读取量与恢复数可查询。同一个 Artifact 对应多个压缩时，不猜测归属；请带 compression_id。审计字段 compression_ratio 为 optimized/original，报告中的 reduction 为 1-ratio。
+恢复按 compression_id 关联，累计读取量与恢复数可查询。没有归属参数的读取始终记为未归属；需要计入具体会话时请带 compression_id，冲突身份不会被自动选中。审计字段 compression_ratio 为 optimized/original，报告中的 reduction 为 1-ratio。
 
 ## 离线 Benchmark
 

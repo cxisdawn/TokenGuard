@@ -179,7 +179,8 @@ def evidence_hashes(folder: Path, record: dict) -> dict:
         except (OSError, ValueError, KeyError, TypeError):
             pass  # Invalid preflight remains ineligible; raw marker is still hashed.
     names += ['trials/' + trial['trial_id'] + '/' + relative for trial in record['trials']
-              for relative in ('quality-result.json', 'agent-started.json', 'agent.stream.jsonl', 'tg-data/audit-v04.jsonl')]
+              for relative in ('quality-result.json', 'agent-started.json', 'agent.stream.jsonl',
+                               'tg-data/audit-v04.jsonl', 'tg-data/diagnostics-v04.jsonl')]
     hashes = {}
     # Receipt membership and all bytes consumed by the verifier belong to the
     # consistency check. Hash missing companions too, so creation is detectable.

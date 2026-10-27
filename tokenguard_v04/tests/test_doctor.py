@@ -79,10 +79,10 @@ class TestDoctor(unittest.TestCase):
         self.assertEqual(report['error_type'],'JSONDecodeError')
         self.assertNotIn('private',json.dumps(report))
     def test_diagnostics_filters_legacy_rows_and_caps_output(self):
-        append({'event':'hook_invocation','session_id':'old'},'diagnostics-v04.jsonl')
+        append({'event':'hook_invocation','status':'below_threshold','session_id':'old'},'diagnostics-v04.jsonl')
         for n in range(8):
-            append({'event':'hook_invocation','session_id':'s1','experiment_id':'e1','stdout_chars':n},'diagnostics-v04.jsonl')
-        append({'event':'hook_invocation','session_id':'s2','experiment_id':'e1'},'diagnostics-v04.jsonl')
+            append({'event':'hook_invocation','status':'below_threshold','session_id':'s1','experiment_id':'e1','stdout_chars':n},'diagnostics-v04.jsonl')
+        append({'event':'hook_invocation','status':'below_threshold','session_id':'s2','experiment_id':'e1'},'diagnostics-v04.jsonl')
         report=diagnostics('s1','e1',limit=3)
         self.assertEqual(report['matching_invocations'],8)
         self.assertEqual(report['omitted_invocations'],5)
@@ -92,8 +92,8 @@ class TestDoctor(unittest.TestCase):
         for limit in (0,101):
             with self.assertRaises(ValueError): diagnostics(limit=limit)
     def test_diagnostics_cli_filter_and_doctor_exit(self):
-        append({'event':'hook_invocation','session_id':'one','experiment_id':'trial'},'diagnostics-v04.jsonl')
-        append({'event':'hook_invocation','session_id':'two'},'diagnostics-v04.jsonl')
+        append({'event':'hook_invocation','status':'below_threshold','session_id':'one','experiment_id':'trial'},'diagnostics-v04.jsonl')
+        append({'event':'hook_invocation','status':'below_threshold','session_id':'two'},'diagnostics-v04.jsonl')
         result=subprocess.run([sys.executable,str(ROOT/'tg.py'),'diagnostics','--session','one','--experiment','trial','--limit','1'],capture_output=True,text=True,check=True)
         self.assertEqual(json.loads(result.stdout)['matching_invocations'],1)
         failed=subprocess.run([sys.executable,str(ROOT/'tg.py'),'doctor','--project',str(self.project)],capture_output=True,text=True)

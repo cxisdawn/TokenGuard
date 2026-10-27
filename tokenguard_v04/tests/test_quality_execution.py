@@ -154,6 +154,158 @@ class TestQualityExecution(unittest.TestCase):
             self.assertEqual(read['summary']['baseline']['infrastructure_failed'], 1)
             self.assertFalse(read['summary']['baseline']['compression_data_complete'])
 
+    def test_corrupt_audit_preserves_independent_grade_and_stops_next_launch(self):
+        corruptions = (b'{"event":', b'\xff\n',
+                       b'{"event":"compression","original_chars":"bad","optimized_chars":1}\n')
+        for corruption in corruptions:
+            with self.subTest(corruption=corruption), experiment() as (folder, record, plan):
+                def grade(*args):
+                    result = fixture_grade(*args)
+                    data = args[-1].parent / 'tg-data'
+                    data.mkdir(exist_ok=True)
+                    (data / 'audit-v04.jsonl').write_bytes(corruption)
+                    return result
+
+                with adapters(folder, record, plan, mode='native', grade=grade):
+                    report = execute_quality(folder, execute=True, allow_paid=True)
+                first = report['runs'][0]
+                self.assertTrue(first['grade']['evaluation_valid'])
+                self.assertTrue(first['grade']['resolved'])
+                self.assertFalse(first['task_success'])
+                self.assertFalse(first['compression']['data_available'])
+                self.assertEqual(first['stage_errors'], [{'stage': 'audit', 'type': 'AuditIntegrityError'}])
+                self.assertEqual(report['arms']['optimized']['completed'], 0)
+                self.assertFalse((folder / 'trials/001-optimized/agent-started.json').exists())
+                read = analyze(folder)
+                self.assertTrue(read['runs'][0]['code_resolved'])
+                self.assertFalse(read['summary']['baseline']['compression_data_complete'])
+
+    def test_incomplete_audit_keeps_observed_counts_and_delivery_unknown_is_separate(self):
+        from tokenguard import audit
+        real_summary = audit.summary
+
+        def partial_summary(*args, **kwargs):
+            return {**real_summary(*args, **kwargs), 'data_available': False, 'compressions': 2,
+                    'saved_chars': 40, 'counts_status': 'partial', 'delivery_data_available': False}
+
+        with experiment() as (folder, record, plan), adapters(folder, record, plan), \
+             patch('tokenguard.swebench_quality.audit.summary', side_effect=partial_summary):
+            report = execute_quality(folder, execute=True, allow_paid=True)
+            first = report['runs'][0]
+            self.assertEqual(first['compression']['compressions'], 2)
+            self.assertEqual(first['compression']['saved_chars'], 40)
+            self.assertEqual(first['stage_errors'], [{'stage': 'audit', 'type': 'AuditIntegrityError'}])
+            self.assertFalse(report['arms']['baseline']['compression_data_complete'])
+
+        def delivery_unknown(*args, **kwargs):
+            return {**real_summary(*args, **kwargs), 'data_available': True, 'delivery_data_available': False}
+
+        with experiment() as (folder, record, plan), adapters(folder, record, plan), \
+             patch('tokenguard.swebench_quality.audit.summary', side_effect=delivery_unknown):
+            report = execute_quality(folder, execute=True, allow_paid=True)
+            self.assertTrue(all(not row['stage_errors'] for row in report['runs']))
+            self.assertEqual(report['arms']['optimized']['completed'], 1)
+            self.assertTrue(report['arms']['baseline']['compression_data_complete'])
+
+    def test_read_only_analysis_rechecks_current_audit_integrity(self):
+        grade = lambda *args: {'resolved': False, 'evaluation_valid': True, 'tests_status': {}}
+        with experiment() as (folder, record, plan), adapters(folder, record, plan, grade=grade):
+            report = execute_quality(folder, execute=True, allow_paid=True)
+            self.assertTrue(report['arms']['baseline']['compression_data_complete'])
+            data = folder / 'trials/001-baseline/tg-data'
+            data.mkdir(exist_ok=True)
+            (data / 'audit-v04.jsonl').write_bytes(
+                b'{"event":"compression","original_chars":true,"optimized_chars":0}\n')
+            read = analyze(folder)
+            self.assertFalse(read['summary']['baseline']['compression_data_complete'])
+            self.assertIn('audit-v04.jsonl:integrity_incomplete', read['runs'][0]['analysis_evidence_errors'])
+            # The saved controller result is evidence, not rewritten by analysis.
+            saved = json.loads((data.parent / 'quality-result.json').read_text(encoding='utf-8'))
+            self.assertTrue(saved['compression']['data_available'])
+
+    def test_diagnostic_read_exception_keeps_already_observed_audit_counts(self):
+        from tokenguard import audit
+        real_summary = audit.summary
+
+        def measured_summary(*args, **kwargs):
+            return {**real_summary(*args, **kwargs), 'compressions': 2, 'saved_chars': 40}
+
+        with experiment() as (folder, record, plan), adapters(folder, record, plan), \
+             patch('tokenguard.swebench_quality.audit.summary', side_effect=measured_summary), \
+             patch('tokenguard.swebench_quality.audit.diagnostics', side_effect=OSError('private detail')):
+            report = execute_quality(folder, execute=True, allow_paid=True)
+            first = report['runs'][0]
+            self.assertEqual(first['compression']['compressions'], 2)
+            self.assertEqual(first['compression']['saved_chars'], 40)
+            self.assertFalse(first['compression']['data_available'])
+            self.assertEqual(first['stage_errors'], [{'stage': 'audit', 'type': 'OSError'}])
+            self.assertEqual(report['arms']['optimized']['completed'], 0)
+
+    def test_read_only_analysis_rechecks_manual_counts_and_cached_seed_availability(self):
+        from tokenguard import audit
+        from tokenguard.experiment import audit_scope
+        grade = lambda *args: {'resolved': False, 'evaluation_valid': True, 'tests_status': {}}
+        for change in ('compression', 'recovery', 'cached_unavailable', 'unchanged'):
+            with self.subTest(change=change), experiment() as (folder, record, plan), \
+                 adapters(folder, record, plan, grade=grade):
+                execute_quality(folder, execute=True, allow_paid=True)
+                root = folder / 'trials/001-baseline'
+                data = root / 'tg-data'
+                data.mkdir(exist_ok=True)
+                trial = record['trials'][0]
+                compression = {'event': 'compression', 'source': 'manual',
+                               'session_id': trial['session_id'], 'experiment_id': record['experiment_id'],
+                               'artifact_id': 'a' * 64, 'compression_id': 'b' * 32,
+                               'original_chars': 100, 'optimized_chars': 10}
+                rows = [compression]
+                path = root / 'quality-result.json'
+                saved = json.loads(path.read_text(encoding='utf-8'))
+                if change in ('recovery', 'cached_unavailable', 'unchanged'):
+                    saved['seed_compression'].update(compressions=1, recovery_count=0)
+                if change == 'recovery':
+                    rows.append({**compression, 'event': 'recovery', 'returned_chars': 5})
+                if change == 'cached_unavailable':
+                    saved['seed_compression']['data_available'] = False
+                write_json(path, saved)
+                (data / 'audit-v04.jsonl').write_text(
+                    ''.join(json.dumps(row) + '\n' for row in rows), encoding='utf-8')
+                with audit_scope(data):
+                    current = audit.summary(trial['session_id'], record['experiment_id'], source='manual')
+                self.assertTrue(current['data_available'])
+                self.assertEqual(current['compressions'], 1)
+                self.assertEqual(current['recovery_count'], int(change == 'recovery'))
+                before = path.read_bytes()
+                read = analyze(folder)
+                first = read['runs'][0]
+                if change == 'unchanged':
+                    self.assertEqual(first['seed_compressions'], 1)
+                    self.assertEqual(first['seed_recoveries'], 0)
+                    self.assertFalse(first['analysis_evidence_errors'])
+                    self.assertTrue(first['seed_data_available'])
+                    self.assertTrue(read['summary']['baseline']['seed_data_complete'])
+                else:
+                    self.assertIsNone(first['seed_compressions'])
+                    self.assertIsNone(first['seed_recoveries'])
+                    self.assertTrue(first['analysis_evidence_errors'])
+                    self.assertFalse(first['seed_data_available'])
+                    self.assertFalse(read['summary']['baseline']['seed_data_complete'])
+                self.assertEqual(path.read_bytes(), before)
+
+    def test_read_only_analysis_rechecks_diagnostics_utf8_and_schema(self):
+        grade = lambda *args: {'resolved': False, 'evaluation_valid': True, 'tests_status': {}}
+        for corruption in (b'\xff\n', b'{"event":"hook_invocation","session_id":{},"status":"compressed"}\n'):
+            with self.subTest(corruption=corruption), experiment() as (folder, record, plan), \
+                 adapters(folder, record, plan, grade=grade):
+                execute_quality(folder, execute=True, allow_paid=True)
+                data = folder / 'trials/001-baseline/tg-data'
+                data.mkdir(exist_ok=True)
+                (data / 'diagnostics-v04.jsonl').write_bytes(corruption)
+                read = analyze(folder)
+                self.assertFalse(read['summary']['baseline']['compression_data_complete'])
+                self.assertFalse(read['runs'][0]['seed_data_available'])
+                self.assertIn('diagnostics-v04.jsonl:integrity_incomplete',
+                              read['runs'][0]['analysis_evidence_errors'])
+
     def test_source_validation_error_never_gets_graded_as_a_candidate(self):
         with experiment() as (folder, record, plan), adapters(folder, record, plan), \
              patch('tokenguard.swebench_quality.candidate_patch', side_effect=ValueError('invalid source')), \
@@ -250,6 +402,7 @@ class TestQualityExecution(unittest.TestCase):
                 text=(folder/delivery['prompt_path']).read_text(encoding='utf-8')
                 self.assertEqual('pytest PASSED index' in text,arm=='optimized')
             data=folder/seeds['deliveries']['001-optimized']['recovery_data_dir']
-            row=json.loads((data/'audit-v04.jsonl').read_text(encoding='utf-8'))
+            rows = [json.loads(line) for line in (data/'audit-v04.jsonl').read_text(encoding='utf-8').splitlines()]
+            row, = [row for row in rows if row['event'] == 'compression']
             self.assertEqual(row['strategy'],'pytest_pass_summary_indexed')
             self.assertEqual(row['pytest_mode'],'indexed')

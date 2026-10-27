@@ -90,6 +90,7 @@ def add_results(folder: Path, *, broken=False) -> None:
             (root / 'tg-data/audit-v04.jsonl').write_text(json.dumps({
                 'event': 'compression', 'source': 'claude_hook', 'session_id': trial['session_id'],
                 'experiment_id': record['experiment_id'], 'tool_use_id': 't',
+                'original_chars': 100, 'optimized_chars': 90,
                 'artifact_id': 'a' * 64, 'compression_id': 'b' * 32}) + '\n', encoding='utf-8')
 
 
@@ -256,6 +257,23 @@ class TestQualityScorecard(unittest.TestCase):
                 self.assertEqual(group['compression_evidence_subset']['pairs'], 0)
                 self.assertFalse(items[0]['analysis']['runs'][1]['test_protocol_satisfied'])
 
+    def test_cached_healthy_audit_does_not_hide_current_invalid_rows(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            folder = project_experiment(Path(temporary))
+            add_results(folder)
+            items, _ = API['collect']([folder])
+            self.assertEqual(API['scorecard'](items)['cohorts'][0]['compression_evidence_subset']['pairs'], 1)
+            audit_path = folder / 'trials/001-optimized/tg-data/audit-v04.jsonl'
+            with audit_path.open('ab') as stream:
+                stream.write(b'{"event":"compression","original_chars":true,"optimized_chars":0}\n')
+            items, _ = API['collect']([folder])
+            run = items[0]['analysis']['runs'][1]
+            self.assertFalse(run['compression_data_available'])
+            self.assertTrue(run['code_resolved'])
+            group = API['scorecard'](items)['cohorts'][0]
+            self.assertEqual(group['all_planned_code_outcomes']['both_resolved'], 1)
+            self.assertEqual(group['compression_evidence_subset']['pairs'], 0)
+
     def test_current_baseline_compression_cannot_be_hidden_by_cached_zero(self):
         with tempfile.TemporaryDirectory() as temporary:
             folder = project_experiment(Path(temporary))
@@ -270,9 +288,13 @@ class TestQualityScorecard(unittest.TestCase):
             (root / 'tg-data/audit-v04.jsonl').write_text(json.dumps({
                 'event': 'compression', 'source': 'claude_hook', 'session_id': trial['session_id'],
                 'experiment_id': record['experiment_id'], 'tool_use_id': 't',
+                'original_chars': 100, 'optimized_chars': 90,
                 'artifact_id': 'a' * 64, 'compression_id': 'b' * 32}) + '\n')
             items, _ = API['collect']([folder])
-            self.assertEqual(items[0]['analysis']['runs'][0]['compressions'], 0)
+            self.assertIsNone(items[0]['analysis']['runs'][0]['compressions'])
+            self.assertFalse(items[0]['analysis']['runs'][0]['compression_data_available'])
+            self.assertIn('audit-v04.jsonl:cached_counts_differ',
+                          items[0]['analysis']['runs'][0]['analysis_evidence_errors'])
             self.assertEqual(items[0]['analysis']['runs'][0]['native_compressions_in_matching_bash_results'], 1)
             group = API['scorecard'](items)['cohorts'][0]
             self.assertEqual(group['compression_evidence_subset']['pairs'], 0)
@@ -312,7 +334,8 @@ class TestQualityScorecard(unittest.TestCase):
         for relative in ('test-receipts/' + 'd' * 32 + '.json',
                          'test-receipts/' + 'd' * 32 + '.stdout.txt',
                          'test-receipts/' + 'd' * 32 + '.stderr.txt',
-                         'worktree/pylint/value.py', 'test-receipts/' + 'e' * 32 + '.json'):
+                         'worktree/pylint/value.py', 'test-receipts/' + 'e' * 32 + '.json',
+                         'tg-data/diagnostics-v04.jsonl'):
             with self.subTest(relative=relative), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary)
                 folder = project_experiment(root / 'experiment')
