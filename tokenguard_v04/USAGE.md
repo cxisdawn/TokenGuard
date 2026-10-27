@@ -26,7 +26,7 @@ $Python = 'C:\src\TokenGuard\.venv\Scripts\python.exe'
 
 `--format deepseek`：最终 Chat Completions 响应对象，或这些对象组成的 JSON 数组/JSONL。读取 id、model 和 usage 允许列表；不保存 choices、消息正文、未知字段或原始响应副本。
 
-可接收已转成 JSONL 的流式 chunk：usage=null 的非最终 chunk 被跳过，带 usage 的 chunk 必须有 finish_reason。相同请求 ID 的相同 usage 只计一次；同 ID 不同 usage 会拒绝，不能把部分流式累计快照相加。
+可接收已转成 JSONL 的流式 chunk：usage=null 的非最终 chunk 不计 Token，但仍校验 id/model 并计入已观察请求。带 usage 的 chunk 必须有 finish_reason；完整任务中每个已观察请求都必须有最终 usage。相同请求 ID 的相同 usage 只计一次；同 ID 不同 usage 会拒绝，不能把部分流式累计快照相加。
 
 `--format anthropic`：最终原生 message 响应（非空 stop_reason），有 id、model、usage。暂不合并 message_start/message_delta，不导入完整 Claude transcript，也不支持 SSE `data:` 文本。需要先由可信采集方导出最终 usage；TokenGuard 不猜测如何拼接。
 
@@ -71,7 +71,8 @@ $Python = 'C:\src\TokenGuard\.venv\Scripts\python.exe'
 导入 JSON 中：
 
 - imported_request_totals：文件中完整请求的指标之和，可能只是任务的一部分。
-- complete_task_totals：只有 coverage=complete_task 且独立请求数吻合才提供；依然注明完整性由调用方声明。
+- complete_task_totals：只有 coverage=complete_task、独立请求数吻合且已观察请求全部终结才提供；依然注明完整性由调用方声明。
+- request_coverage：分别保存已观察请求数、完整请求数、未终结请求 ID 和是否全部终结。partial 可以保留已知完整请求的小计，整任务指标保持 unavailable；没有任何最终 usage 时拒绝导入。
 - 缓存比例：cache read / 全部输入，不是“请求命中次数”。任何一项未知或分母为 0 都 unavailable。
 - 所有标准化值代表导出文件所报告的 usage，不是字符启发式估算；原始响应/覆盖率真实性没有被独立认证。
 
@@ -82,6 +83,8 @@ $Python = 'C:\src\TokenGuard\.venv\Scripts\python.exe'
 可额外指定 `--billing`，内容为经过调用方从供应商账单整理的 session_total JSON。必须含 schema_version=1、scope=session_total、匹配的 session_id、完整且精确匹配的 request_ids、currency（USD/CNY 等三位大写代码）、amount（非负十进制字符串）、source、evidence_reference。
 
 source 只接受 provider_billing_export 或 invoice；synthetic 清单只接受 synthetic_fixture，并永远不会提供 actual_billed_cost。source=claude_cli_estimate 等会被拒绝。参考字段只保留 SHA256，不将任意引用正文复制到报告。
+
+规范化账单保留整数版本、scope、session_id 和 request_ids，比较时重新检查绑定。复制另一组的账单或改变绑定字段会被拒绝；旧格式没有保存绑定时，保留可用 usage，费用及费用变化为 unavailable，并列出 billing_binding_unavailable。不会从旧金额推测归属，也不会修改历史文件。
 
 只有 evidence_kind=provider_export 且提供了对应供应商/发票账单记录时，才提供声明来源的 actual_billed_cost 对象，仍标记 caller_supplied / not independently verified。网关 usage 的来源无法据此被认证，因此 actual_billed_cost 继续 unavailable；有对应账单时仍可查看 reported_billing。工具不会访问账单网站或验证发票真伪。
 
@@ -97,6 +100,8 @@ source 只接受 provider_billing_export 或 invoice；synthetic 清单只接受
 
 可一次传入多轮的全部规范化文件。按 experiment_id/task_id/pair_id 分组，检查同模型、提供商、Agent 版本、Prompt、初始快照、共享配置、原生 usage 格式和证据类型；拒绝复用会话或跨 arm 共用请求 ID。比较时从逐请求记录重新校验总量，不信任被改写的汇总数字。
 
+比较也重新校验 request_coverage。旧格式若曾忽略流式 chunk，或连忽略计数都缺失，必须重新导入明确指定的原 usage 文件；无法从旧聚合恢复请求身份。旧格式只有明确记录忽略计数为整数 0 时，才可沿用非流式记录。
+
 缺 arm/重复 arm/配置不匹配为 invalid_pair；任务 usage 不完整为 partial_usage；质量下降为 quality_regression。报告保留问题，不将这些 pair 纳入成功任务汇总。不同币种不计算费用比例；零基线不输出除零结果。所有排除原因明确展示。
 
 报告同时提供输入、输出、缓存读/写、推理子项、总量、缓存比例百分点变化、耗时、工具调用、恢复次数和账单金额差异。reduction_ratio=(baseline-optimized)/baseline，负数代表增加。optimized_minus_baseline 保留原始绝对差。费用使用 Decimal 计算，不按二进制浮点累计金额。
@@ -107,4 +112,4 @@ source 只接受 provider_billing_export 或 invoice；synthetic 清单只接受
 
 ## 当前真实验证进度
 
-已有一次真实 Claude 会话的 Hook 输出替换可见性证据，也完成了一轮真实任务 A/B（两组代码通过验收，优化组输出较短，实际压缩 0 次），但没有供应商原生的完整请求 Usage 和独立账单。`tg.py stats` 仍只报告 Hook 字符/本地估算与恢复统计，不会自动加载离线 usage 示例，也不会将其数值混入真实会话。后续真实 A/B 需另外授权、相同初始快照和新会话，以及可信的 usage/账单采集来源。
+已有一次真实 Claude 会话的 Hook 输出替换可见性证据；早期简单任务 A/B 两组代码通过验收但实际压缩 0 次。后续中等复杂任务存在优化组失败，最近受控日志实验中基线完成修复、优化组未完成并引入回归，见 [保留的负面结果](QUALITY_PILOT_RESULTS.md)。没有供应商原生的完整请求 Usage 和独立账单，也没有编码质量无损或真实费用节省结论。`tg.py stats` 仍只报告 Hook 字符/本地估算与恢复统计，不会自动加载离线 usage 示例。后续真实 A/B 需另外授权、相同初始快照和新会话，以及可信的 usage/账单采集来源。

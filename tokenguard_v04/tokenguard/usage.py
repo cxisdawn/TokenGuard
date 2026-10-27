@@ -109,14 +109,19 @@ def _records(path: Path) -> Iterator[dict]:
 
 def normalize(row: dict, format_name: str, model: str) -> dict | None:
     # Only finalized native responses, not Claude transcripts or estimated CLI totals.
+    if format_name not in ('deepseek', 'anthropic') or not isinstance(row, dict):
+        raise ValueError('Unsupported usage format or response')
     kind=row.get('object') if format_name=='deepseek' else row.get('type')
-    if format_name=='deepseek' and kind=='chat.completion.chunk' and row.get('usage') is None:
-        return None
     if kind not in (('chat.completion','chat.completion.chunk') if format_name=='deepseek' else ('message',)):
         raise ValueError('Unsupported native response; supply finalized provider usage')
-    if row.get('model') != model:
+    if _text(row.get('model'), 'response model') != model:
         raise ValueError('Response model differs from manifest')
     request_id=_text(row.get('id'),'request id')
+    if format_name=='deepseek' and kind=='chat.completion.chunk' and row.get('usage') is None:
+        # An early chunk still establishes an observed request. The importer must
+        # reconcile its identity with a terminal usage record before claiming a
+        # complete task; skipping its counters does not make the request free.
+        return None
     usage=row.get('usage')
     if not isinstance(usage,dict):
         raise ValueError('Final usage object missing')
@@ -168,20 +173,31 @@ def normalize(row: dict, format_name: str, model: str) -> dict | None:
     return {'request_id':request_id,'model':model,'metrics':values}
 
 
+def billing_binding(raw: Any, manifest: dict, request_ids: set[str]) -> dict:
+    """Validate the session and exact requests covered by a claimed bill."""
+    if (not isinstance(raw,dict) or type(raw.get('schema_version')) is not int
+            or raw['schema_version']!=1 or raw.get('scope')!='session_total'):
+        raise ValueError('Billing must be a versioned session_total record')
+    if manifest['coverage']!='complete_task' or raw.get('session_id')!=manifest['session_id']:
+        raise ValueError('Normalized billing must cover the same complete session')
+    ids=raw.get('request_ids')
+    if not isinstance(ids,list):
+        raise ValueError('Normalized billing request IDs must be a list')
+    clean=[_text(value, 'billing request id') for value in ids]
+    if len(clean)!=len(set(clean)) or set(clean)!=request_ids:
+        raise ValueError('Normalized billing request IDs must exactly match imported requests')
+    return {'schema_version':1, 'scope':'session_total',
+            'session_id':manifest['session_id'], 'request_ids':sorted(clean)}
+
+
 def _billing(path: Path | None, manifest: dict, request_ids: set[str]) -> dict | str:
     if path is None:
         return 'unavailable'
     raw=load(path)
-    if not isinstance(raw,dict) or raw.get('schema_version')!=1 or raw.get('scope')!='session_total':
-        raise ValueError('Billing must be a versioned session_total record')
+    binding=billing_binding(raw,manifest,request_ids)
     allowed=('synthetic_fixture',) if manifest['evidence_kind']=='synthetic' else ('provider_billing_export','invoice')
     if raw.get('source') not in allowed:
         raise ValueError('Estimated or incompatible billing source rejected')
-    if manifest['coverage']!='complete_task' or raw.get('session_id')!=manifest['session_id']:
-        raise ValueError('Billing must cover the same complete session')
-    ids=raw.get('request_ids')
-    if not isinstance(ids,list) or any(not isinstance(x,str) for x in ids) or len(ids)!=len(set(ids)) or set(ids)!=request_ids:
-        raise ValueError('Billing request IDs must exactly match imported requests')
     currency=raw.get('currency')
     if not isinstance(currency,str) or not re.fullmatch('[A-Z]{3}',currency):
         raise ValueError('Invalid billing currency')
@@ -194,7 +210,7 @@ def _billing(path: Path | None, manifest: dict, request_ids: set[str]) -> dict |
     if not amount.is_finite() or amount<0 or abs(amount.as_tuple().exponent)>12 or amount>Decimal('1000000000'):
         raise ValueError('Invalid billing amount range')
     reference=_text(raw.get('evidence_reference'),'billing evidence reference')
-    return {'amount':format(amount,'f'),'currency':currency,'source':raw['source'],
+    return {**binding,'amount':format(amount,'f'),'currency':currency,'source':raw['source'],
             'evidence_reference_sha256':hashlib.sha256(reference.encode()).hexdigest(),
             'verification':'caller_supplied; not independently verified',
             'source_sha256':hashlib.sha256(path.read_bytes()).hexdigest()}
@@ -215,9 +231,11 @@ def import_usage(source: Path, manifest_path: Path, format_name: str,
     manifest=manifest_fields(load(manifest_path))
     validate_format_source(manifest,format_name)
     requests={}
+    observed=set()
     duplicates=skipped=0
     for row in _records(source):
         item=normalize(row,format_name,manifest['model'])
+        observed.add(row['id'])  # normalize validates every identity, including early chunks.
         if item is None:
             skipped+=1
             continue
@@ -230,6 +248,9 @@ def import_usage(source: Path, manifest_path: Path, format_name: str,
             requests[request_id]=item
     if not requests:
         raise ValueError('No finalized usage records')
+    unresolved=sorted(observed-set(requests))
+    if manifest['coverage']=='complete_task' and unresolved:
+        raise ValueError('Observed requests are missing finalized usage; complete task unavailable')
     if manifest['coverage']=='complete_task' and manifest['expected_request_count']!=len(requests):
         raise ValueError('Request count does not match complete-task declaration')
     totals={key:sum(r['metrics'][key] for r in requests.values())
@@ -245,6 +266,9 @@ def import_usage(source: Path, manifest_path: Path, format_name: str,
             'provenance':'caller-supplied local export; not independently authenticated',
             'coverage_verification':'caller-declared coverage and request count; not independently observed',
             'unique_requests':len(requests),'duplicate_records_ignored':duplicates,'nonfinal_chunks_ignored':skipped,
+            'request_coverage':{'observed_requests':len(observed), 'finalized_requests':len(requests),
+                                'unresolved_request_ids':unresolved,
+                                'all_observed_requests_finalized':not unresolved},
             'requests':list(requests.values()),'imported_request_totals':totals,'cache_hit_ratio':cache_ratio,
             'complete_task_totals':totals if manifest['coverage']=='complete_task' else 'unavailable',
             'reported_billing':billed,

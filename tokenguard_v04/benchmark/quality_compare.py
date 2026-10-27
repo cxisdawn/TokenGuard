@@ -17,6 +17,7 @@ sys.path.insert(0, str(BASE))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from quality_analysis import analyze, mapping
 from tokenguard.experiment import load_experiment
+from tokenguard.experiment_snapshot import changes
 from tokenguard.quality_protocol import MODES, file_sha, read_bytes
 from tokenguard.quality_seed import checked_preflight, inside
 from tokenguard.visible_tests import canonical_path
@@ -180,6 +181,7 @@ def evidence_hashes(folder: Path, record: dict) -> dict:
             pass  # Invalid preflight remains ineligible; raw marker is still hashed.
     names += ['trials/' + trial['trial_id'] + '/' + relative for trial in record['trials']
               for relative in ('quality-result.json', 'agent-started.json', 'agent.stream.jsonl',
+                               'evaluation/candidate.patch', 'evaluation/grade.json',
                                'tg-data/audit-v04.jsonl', 'tg-data/diagnostics-v04.jsonl')]
     hashes = {}
     # Receipt membership and all bytes consumed by the verifier belong to the
@@ -198,7 +200,14 @@ def evidence_hashes(folder: Path, record: dict) -> dict:
                           for suffix in ('.json', '.stdout.txt', '.stderr.txt')]
         except (OSError, ValueError) as exc:
             hashes[directory] = {'error': type(exc).__name__}
-        for name in record['task']['editable_files']:
+        # Candidate binding checks protected files and unexpected membership,
+        # so those observations also belong inside the consistency interval.
+        try:
+            hashes[prefix + 'worktree-state'] = changes(folder / prefix / 'worktree',
+                                                       record['files_sha256'], record['task']['editable_files'])
+        except (OSError, ValueError, TypeError) as exc:
+            hashes[prefix + 'worktree-state'] = {'error': type(exc).__name__}
+        for name in record['task']['files']:
             names.append(prefix + 'worktree/' + name)
     names += ['snapshot/' + name for name in record['task']['files']]
     for name in names:

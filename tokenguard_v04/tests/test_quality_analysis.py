@@ -36,6 +36,9 @@ class TestQualityAnalysis(unittest.TestCase):
             row['grade']['resolved'] = False
             row['task_success'] = False
             write_json(path, row)
+            # This fixture represents a measured failure, so its archived grade
+            # must agree with the cached result (tampering has separate tests).
+            write_json(path.parent / 'evaluation/grade.json', row['grade'])
             result = analyze(folder, write=False)
             self.assertIs(result['runs'][1]['code_resolved'], False)
             self.assertEqual(result['summary']['optimized']['valid_grades'], 1)
@@ -124,6 +127,7 @@ class TestQualityAnalysis(unittest.TestCase):
                 'FAIL_TO_PASS': {'success': [], 'failure': ['test_a']},
                 'PASS_TO_PASS': {'success': ['test_b'], 'failure': []}})
             write_json(path, row)
+            write_json(path.parent / 'evaluation/grade.json', row['grade'])
             result = analyze(folder, write=False)
             self.assertEqual(result['runs'][1]['f2p_success'], 0)
             self.assertEqual(result['runs'][1]['p2p_success'], 1)
@@ -213,6 +217,7 @@ class TestQualityAnalysis(unittest.TestCase):
                 path = root / 'quality-result.json'
                 row = json.loads(path.read_text())
                 row['compression']['compressions'] = 0
+                row['compression']['saved_chars'] = 0
                 if trial_id == '002-optimized':
                     row['compression'].pop('compressions')
                 write_json(path, row)

@@ -58,7 +58,7 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-2026-10-27 本地当前版本回归为 **420 passed、1 skipped、369 subtests passed**，在安装迁移阶段的 322 项基础上新增 98 项审计、交付和评测完整性回归；跳过项为 Windows 符号链接权限不可用。冻结源码前后 Hash 一致，108 项实际 pytest 输出契约和三轮 30 项 Mock 对照通过。历史 v0.1/v0.2/v0.3 测试分别为 4/6/14 项通过，源码保留；先前阶段另有 21 项导航检查及 13 个本地例子通过。以上本地检查不调用模型。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端执行状态请以 Actions 为准，详见 [验证范围](docs/VALIDATION.md)。
+2026-10-27 本地当前版本回归为 **524 passed、1 skipped、406 subtests passed**，相对上一阶段新增 104 项报告、计量和失败保留测试；跳过项为 Windows 符号链接权限不可用。三轮固定日志 Mock 30/30、两种基线任务 4/4 通过，历史十个真实会话的文件及原成绩保持不变。本轮未调用模型。先前的 108 项实际 pytest 输出契约、21 项导航检查、13 个本地例子及历史 v0.1/v0.2/v0.3 的 4/6/14 项测试结果保留。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端状态以 Actions 为准，详见 [验证范围](docs/VALIDATION.md)。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
@@ -82,6 +82,7 @@ $Project = 'C:\work\my-project'
 
 - [v0.4 接入与恢复说明](tokenguard_v04/README.md)
 - [审计完整性、Hook 输出与故障复现](tokenguard_v04/AUDIT_RELIABILITY.md)
+- [任务报告、流式 Usage 与账单证据校验](tokenguard_v04/REPORT_RELIABILITY.md)
 - [语义、长行恢复与评测证据验证](tokenguard_v04/SAFETY_VALIDATION.md)
 - [pytest 测试名称索引及保守透传](tokenguard_v04/PYTEST_NAVIGATION.md)
 - [受控初始日志真实 A/B 的负面结果](tokenguard_v04/QUALITY_PILOT_RESULTS.md)

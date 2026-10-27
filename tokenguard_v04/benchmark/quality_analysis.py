@@ -9,10 +9,11 @@ import re
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-from tokenguard import audit
+from tokenguard import audit, usage
 from tokenguard.experiment import audit_scope
 from tokenguard.quality_protocol import evidence, pair_assessment, read_bytes, text_blocks, trace_tools
 from tokenguard.visible_tests import fingerprint
+from tokenguard.swebench_quality import candidate_patch
 
 
 def mapping(value: object) -> dict:
@@ -127,13 +128,6 @@ def current_audit_integrity(root: Path, trial: dict, record: dict, compression: 
         valid = False
     if any(error.startswith(path.name + ':') for error in errors):
         return False
-    if not path.exists():
-        # No audit file is expected for a clean zero-compression baseline.
-        if any((count(value.get('compressions')) or 0) > 0 or
-               (count(value.get('recovery_count')) or 0) > 0 for value in (compression, seed)):
-            errors.append(path.name + ':missing_observed_records')
-            return False
-        return valid
     try:
         with audit_scope(path.parent):
             current = audit.summary(trial['session_id'], record['experiment_id'],
@@ -143,6 +137,12 @@ def current_audit_integrity(root: Path, trial: dict, record: dict, compression: 
         if any(value['data_available'] is not True for value in (current, current_seed)):
             errors.append(path.name + ':integrity_incomplete')
             return False
+        if any(count(compression.get(key)) is None for key in ('compressions', 'recovery_count')):
+            errors.append(path.name + ':cached_counts_invalid')
+            valid = False
+        if any(key in seed and count(seed[key]) is None for key in ('compressions', 'recovery_count')):
+            errors.append(path.name + ':cached_seed_counts_invalid')
+            valid = False
         if any(count(compression.get(key)) is not None and compression[key] != current[key]
                for key in ('compressions', 'recovery_count')):
             errors.append(path.name + ':cached_counts_differ')
@@ -152,10 +152,50 @@ def current_audit_integrity(root: Path, trial: dict, record: dict, compression: 
                for key in ('compressions', 'recovery_count')):
             errors.append(path.name + ':cached_seed_counts_differ')
             valid = False
+        # Check every cached quantity used by reporting, including character
+        # totals. Matching event counts alone do not certify cached savings.
+        metrics = ('original_chars', 'optimized_chars', 'saved_chars', 'returned_chars',
+                   'scanned_chars', 'prepared_candidates', 'confirmed_stdout_deliveries',
+                   'delivery_failures', 'delivery_unknown', 'estimated_original_tokens',
+                   'estimated_optimized_tokens', 'net_character_saving_after_recovery')
+        for cached, actual, label in ((compression, current, 'cached_metrics_differ'),
+                                       (seed, current_seed, 'cached_seed_metrics_differ')):
+            if any(key in cached and (type(cached[key]) is not type(actual.get(key)) or
+                                      cached[key] != actual.get(key)) for key in metrics):
+                errors.append(path.name + ':' + label)
+                valid = False
+        if valid:
+            for cached, actual in ((compression, current), (seed, current_seed)):
+                cached.update({key: actual[key] for key in ('compressions', 'recovery_count', *metrics)
+                               if key in actual})
         return valid
     except (OSError, ValueError, TypeError, KeyError) as exc:
         errors.append(path.name + ':' + type(exc).__name__)
         return False
+
+
+def current_grade_binding(folder: Path, root: Path, record: dict, grade: dict,
+                          errors: list[str]) -> tuple[bool, dict]:
+    """Bind the local recorded grade to the currently retained candidate bytes.
+
+    These are consistency checks over controller-produced files, not proof of
+    authentic execution or a fresh rerun of the official grader.
+    """
+    try:
+        patch, check = candidate_patch(folder, record, root / 'worktree')
+        stored_patch = read_bytes(root / 'evaluation/candidate.patch')
+        stored_grade = usage.parse(read_bytes(root / 'evaluation/grade.json').decode('utf-8'))
+        if not check['only_allowed_changes']:
+            raise ValueError('Current candidate contains disallowed changes')
+        if (not isinstance(stored_grade, dict) or
+                any(type(stored_grade.get(key)) is not bool for key in ('resolved', 'evaluation_valid')) or
+                patch.encode('utf-8') != stored_patch or
+                json.dumps(stored_grade, sort_keys=True, allow_nan=False) != json.dumps(grade, sort_keys=True, allow_nan=False)):
+            raise ValueError('Candidate or grade differs from evaluation evidence')
+        return True, check
+    except (OSError, ValueError, TypeError, KeyError) as exc:
+        errors.append('grade_source_binding_unavailable:' + type(exc).__name__)
+        return False, {}
 
 
 def analyze(folder: Path, *, write: bool = True) -> dict:
@@ -255,10 +295,12 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
             grade = {}
         f2p, p2p = (status_count(grade, category, analysis_errors)
                     for category in ('FAIL_TO_PASS', 'PASS_TO_PASS'))
-        evaluation_valid = (grade_shape and grade.get('evaluation_valid') is True and
+        reported_evaluation_valid = (grade_shape and grade.get('evaluation_valid') is True and
                             'grade_status_schema_invalid' not in analysis_errors)
         source = mapping(row.get('source_changes'))
-        allowed = source.get('only_allowed_changes') is True
+        binding, current_source = current_grade_binding(folder, root, record, grade, analysis_errors)
+        evaluation_valid = reported_evaluation_valid and binding
+        allowed = source.get('only_allowed_changes') is True and current_source.get('only_allowed_changes') is True
         resolved = grade.get('resolved') if evaluation_valid and allowed else None
         compression, seed = mapping(row.get('compression')), mapping(row.get('seed_compression'))
         audit_valid = current_audit_integrity(root, trial, record, compression, seed, analysis_errors)
@@ -266,16 +308,23 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                      all(count(compression.get(k)) is not None for k in ('compressions', 'recovery_count')))
         seed_available = (audit_valid and seed.get('data_available', True) is True and
                           all(count(seed.get(k)) is not None for k in ('compressions', 'recovery_count')))
+        flags_valid = all(type(row.get(key)) is bool for key in ('timed_out', 'outputs_truncated'))
+        stage_valid = isinstance(row.get('stage_errors', []), list)
+        if not flags_valid:
+            analysis_errors.append('execution_flags_missing_or_invalid')
+        if not stage_valid:
+            analysis_errors.append('stage_errors_schema_invalid')
         success = None
         if resolved is not None:
-            if (resolved is False or row.get('task_success') is False or row.get('stage_errors') or
+            if (resolved is False or row.get('task_success') is False or (stage_valid and row.get('stage_errors')) or
                     row.get('timed_out') is True or row.get('outputs_truncated') is True or
                     (type(row.get('agent_exit_code')) is int and row['agent_exit_code'] != 0) or
                     final.get('is_error') is True or str(final.get('subtype', '')).startswith('error')):
                 success = False
             elif (row.get('task_success') is True and type(row.get('agent_exit_code')) is int and
                   row['agent_exit_code'] == 0 and final.get('subtype') == 'success' and
-                  final.get('is_error') is False and not stream_errors):
+                  final.get('is_error') is False and not stream_errors and flags_valid and stage_valid and
+                  row['timed_out'] is False and row['outputs_truncated'] is False and audit_valid and available):
                 success = True
         pair_rows.append({**trial, 'analysis_evidence_errors': analysis_errors,
                           'stage_errors': row.get('stage_errors', []),
@@ -286,6 +335,9 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                           'protocol_evidence': observed, 'seed_delivery': mapping(row.get('seed_delivery'))})
         runs.append({**trial, 'state': 'completed', 'code_resolved': resolved,
                      'evaluation_valid': evaluation_valid,
+                     'reported_code_resolved': grade.get('resolved') if grade_shape else None,
+                     'reported_evaluation_valid': reported_evaluation_valid,
+                     'grade_source_binding_verified': binding,
                      'execution_status': row.get('execution_status', 'legacy'),
                      'stage_errors': row.get('stage_errors', []),
                      'analysis_evidence_errors': analysis_errors,
@@ -294,7 +346,9 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                      'task_completed_and_valid': success,
                      'agent_end_reason': final.get('subtype', row.get('execution_error') or 'unknown'),
                      'agent_exit_code': row.get('agent_exit_code'),
-                     'f2p_success': f2p, 'p2p_success': p2p,
+                     'f2p_success': f2p if evaluation_valid else None,
+                     'p2p_success': p2p if evaluation_valid else None,
+                     'reported_f2p_success': f2p, 'reported_p2p_success': p2p,
                      'agent_elapsed_ms': number(row.get('agent_elapsed_ms')), 'tool_calls': count(row.get('tool_calls')),
                      'tool_error_results': tool_errors if stream_readable else None,
                      'permission_denial_count': count(row.get('permission_denial_count')),
@@ -305,7 +359,7 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                      'model_metadata_citations': count(row.get('model_cited_matching_metadata_count')),
                      'recovery_count': count(compression.get('recovery_count')) if available else None,
                      'saved_stdout_chars': count(compression.get('saved_chars')) if available else None,
-                     'changed_files': source.get('changed_files'),
+                     'changed_files': current_source.get('changed_files'),
                      'only_allowed_changes': allowed,
                      'test_protocol_satisfied': observed['agent_test_protocol_satisfied'],
                      'protocol_evidence_rechecked': observed['evidence_available'],
@@ -378,6 +432,7 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
                          'code resolution and successful agent completion are separate outcomes',
                          'null means unknown; false code resolution requires a valid grade and allowed source changes',
                          'native protocol evidence is rechecked against current receipts, logs and editable source bytes',
+                         'grade binding compares local candidate.patch and grade.json with current source and cached grade; it is not a fresh grading run or tamper-proof certification',
                          'receipt evidence is local to the same OS user, not tamper-proof attestation']}
     if not write:
         return result
@@ -387,7 +442,8 @@ def analyze(folder: Path, *, write: bool = True) -> dict:
               'compressed_messages_in_host_transcript', 'recovery_count', 'test_protocol_satisfied',
               'native_compressions_in_matching_bash_results', 'seed_compressions', 'seed_recoveries',
               'execution_status', 'stage_errors', 'compression_data_available']
-    fields += ['analysis_evidence_errors', 'manual_guides_echoed_in_tool_results']
+    fields += ['analysis_evidence_errors', 'manual_guides_echoed_in_tool_results',
+               'grade_source_binding_verified', 'reported_code_resolved', 'reported_evaluation_valid']
     with (folder / 'quality-analysis.csv').open('w', encoding='utf-8', newline='') as stream:
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()

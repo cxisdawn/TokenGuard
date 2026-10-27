@@ -51,6 +51,8 @@ doctor 只读已注册的项目 Hook，验证解释器和脚本路径，在临�
 
 审计坏行、无效计量和身份冲突会明确标为不完整；候选生成、stdout 写入及宿主消费分别验证。完整规则及故障复现见 [审计完整性与 Hook 输出验证](AUDIT_RELIABILITY.md)。
 
+任务报告进一步核对实际受测源码、归档评分和当前审计；失败及未运行试验保留在分母中，缺失测量不补零。Usage 逐请求对齐，账单重新检查会话归属。兼容规则和本地复现见 [报告证据校验](REPORT_RELIABILITY.md)。
+
 ```powershell
 & $Python .\tg.py diagnostics --limit 5
 & $Python .\tg.py diagnostics --session 'SESSION_ID' --limit 5

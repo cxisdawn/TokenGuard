@@ -25,6 +25,8 @@ $V04 = 'D:\tokenguard-benchmark\tokenguard_v04'
 
 报告保留本地来源路径和实验 ID，便于追溯，但不复制原始工具日志、源码、完整 Prompt、会话 ID 或凭据。报告目录默认在 Git 忽略的 `reports/` 内，不自动上传。
 
+分析还核对当前候选补丁与归档 `evaluation/candidate.patch`、`evaluation/grade.json`；这些文件和全部任务白名单文件加入前后 Hash 检查。评分类型或内容矛盾、候选变化、档案缺失时当前成绩为 unknown，保留原 `reported_code_resolved`。审计不完整会撤销严格完成和压缩比较资格，独立有效的代码成绩仍可保留。这是本地记录一致性检查，不是新一轮官方评分或防篡改认证，见 [详细规则](REPORT_RELIABILITY.md)。
+
 ## 如何分组
 
 按任务、提供商／请求模型、协议、预算、基线模式、基础 Prompt Hash、初始快照 Hash、完整配置／工具 Hash、镜像 ID、任务数据及评分源码提交保守分组。隐式旧协议和显式新协议也区分，受控模式的初始观察 Hash 不同时分开；两个预算或不同压缩器版本不合并成一个成功率。

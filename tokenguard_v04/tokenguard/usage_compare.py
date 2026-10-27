@@ -5,10 +5,45 @@ import json
 from pathlib import Path
 import uuid
 
-from .usage import SCHEMA, METRICS, manifest_fields, normalize, validate_format_source
+from .usage import (SCHEMA, METRICS, _integer, _text, billing_binding,
+                    manifest_fields, normalize, validate_format_source)
 
 UNAVAILABLE = 'unavailable'
 IDENTITY = ('provider','model','agent_version','prompt_sha256','initial_snapshot_sha256','config_sha256','baseline_mode')
+
+
+def _request_coverage(bundle: dict, manifest: dict, request_ids: set[str]) -> dict | str:
+    """Recheck observed-but-unfinished requests rather than trusting task totals."""
+    for field in ('duplicate_records_ignored', 'nonfinal_chunks_ignored'):
+        if field in bundle:
+            _integer(bundle[field], field)
+    if 'request_coverage' not in bundle:
+        # Legacy imports discarded early chunk identities. When any were seen,
+        # their relation to finalized requests cannot now be reconstructed.
+        # All legacy imports wrote this count, so absence is unknown, not zero.
+        if 'nonfinal_chunks_ignored' not in bundle or bundle['nonfinal_chunks_ignored']:
+            raise ValueError('Legacy streaming export lacks request coverage evidence; reimport source')
+        return UNAVAILABLE
+    coverage=bundle['request_coverage']
+    if not isinstance(coverage,dict):
+        raise ValueError('Invalid normalized request coverage')
+    observed=_integer(coverage.get('observed_requests'),'observed_requests')
+    finalized=_integer(coverage.get('finalized_requests'),'finalized_requests')
+    unresolved=coverage.get('unresolved_request_ids')
+    if not isinstance(unresolved,list):
+        raise ValueError('Invalid unresolved request IDs')
+    pending=[_text(value,'unresolved request ID') for value in unresolved]
+    if len(set(pending))!=len(pending) or set(pending)&request_ids:
+        raise ValueError('Conflicting unresolved request IDs')
+    if finalized!=len(request_ids) or observed!=len(request_ids)+len(pending):
+        raise ValueError('Normalized request coverage count differs')
+    if (type(coverage.get('all_observed_requests_finalized')) is not bool
+            or coverage['all_observed_requests_finalized']!=(not pending)):
+        raise ValueError('Normalized request completion differs')
+    if manifest['coverage']=='complete_task' and pending:
+        raise ValueError('Observed requests are missing finalized usage; complete task unavailable')
+    return {'observed_requests':observed, 'finalized_requests':finalized,
+            'unresolved_request_ids':pending, 'all_observed_requests_finalized':not pending}
 
 
 def _checked(bundle: dict) -> dict:
@@ -44,8 +79,9 @@ def _checked(bundle: dict) -> dict:
         if validated!=item or item['request_id'] in seen:
             raise ValueError('Invalid or duplicate normalized request')
         seen.add(item['request_id']); clean.append(validated)
-    if bundle.get('unique_requests')!=len(clean):
+    if _integer(bundle.get('unique_requests'),'unique_requests')!=len(clean):
         raise ValueError('Normalized request count differs')
+    coverage=_request_coverage(bundle,manifest,seen)
     if manifest['coverage']=='complete_task' and manifest['expected_request_count']!=len(clean):
         raise ValueError('Complete task request count differs')
     totals={k:sum(item['metrics'][k] for item in clean) if all(item['metrics'][k] is not None for item in clean) else UNAVAILABLE for k in METRICS}
@@ -55,6 +91,7 @@ def _checked(bundle: dict) -> dict:
     if expected!=bundle.get('complete_task_totals'):
         raise ValueError('Normalized task totals differ from coverage')
     billing=bundle.get('reported_billing')
+    billing_status='unavailable'
     if billing!=UNAVAILABLE:
         if not isinstance(billing,dict) or not isinstance(billing.get('amount'),str) or len(billing['amount'])>100 or not isinstance(billing.get('currency'),str):
             raise ValueError('Invalid normalized billing')
@@ -69,7 +106,20 @@ def _checked(bundle: dict) -> dict:
         allowed=('synthetic_fixture',) if manifest['evidence_kind']=='synthetic' else ('provider_billing_export','invoice')
         if billing.get('source') not in allowed or manifest['coverage']!='complete_task':
             raise ValueError('Normalized billing evidence differs')
-    return {**bundle,'manifest':manifest,'requests':clean,'imported_request_totals':totals,'complete_task_totals':expected}
+        binding_fields=('schema_version','scope','session_id','request_ids')
+        if not any(field in billing for field in binding_fields):
+            # Old bundles discarded the binding after import. Retain their usage
+            # evidence, but do not use an unbound amount in a cost comparison.
+            billing=UNAVAILABLE
+            billing_status='binding_unavailable'
+        else:
+            binding=billing_binding(billing,manifest,seen)
+            billing={**billing,**binding}
+            billing_status='bound_caller_supplied'
+    return {**bundle,'manifest':manifest,'requests':clean,'request_coverage':coverage,
+            'imported_request_totals':totals,'complete_task_totals':expected,
+            'reported_billing':billing,'billing_validation':billing_status,
+            'actual_billed_cost':billing if manifest['evidence_kind']=='provider_export' and isinstance(billing,dict) else UNAVAILABLE}
 
 
 def _delta(before, after) -> dict | str:
@@ -149,6 +199,9 @@ def compare(bundles: list[dict]) -> dict:
             if all(isinstance(t[k],int) for t in (bt,ot) for k in ('input_tokens','cache_read_tokens')) and bt['input_tokens']>0 and ot['input_tokens']>0 else UNAVAILABLE)
         pair['metrics']=metrics
         pair['reported_billing_change']=_cost(b['reported_billing'],o['reported_billing'])
+        for arm,run in (('baseline',b),('optimized',o)):
+            if run['billing_validation']=='binding_unavailable':
+                pair['issues'].append(arm+'_billing_binding_unavailable')
         if isinstance(b['reported_billing'],dict) and isinstance(o['reported_billing'],dict) and pair['reported_billing_change']==UNAVAILABLE:
             pair['issues'].append('billing_currency_mismatch')
         for arm,manifest in (('baseline',bm),('optimized',om)):

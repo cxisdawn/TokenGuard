@@ -1,12 +1,10 @@
 """Reproducible offline paired experiments. This runner never invokes a model API."""
 import argparse
-import csv
 import hashlib
 import json
 import os
 from pathlib import Path
 import shutil
-import statistics
 import subprocess
 import sys
 import time
@@ -18,6 +16,9 @@ from tokenguard.hook import handle
 from tokenguard.audit import summary
 from tokenguard.tokens import estimate
 from tokenguard.storage import grep_lines, read_lines, MAX_SCAN
+from tokenguard.experiment_validation import run_process
+from tokenguard.mock_reporting import unrun, checked_worker, export
+from tokenguard.usage import parse
 
 PROMPT = 'Run the task checks; preserve failure diagnostics. For Python bug task, fix divide without changing tests, then run pytest. In pytest log fixtures also inspect test_123 by name. In the large artifact task, verify final failure details by line range.'
 CASES = ('pytest_pass', 'pytest_fail', 'build_errors', 'python_bug', 'large_artifact_recovery')
@@ -109,18 +110,22 @@ def worker(config: dict) -> dict:
                 visible = tool(recovered, 'python tg.py grep ARTIFACT test_123')
             success = success and target in visible
     report = summary(session, config['experiment_id'])
+    audit_complete = report.get('data_available') is True
+    def measured(key):
+        return report.get(key) if audit_complete else None
     original_tokens = sum(estimate(x)['estimated_tokens'] for x in inputs)
     visible_tokens = sum(estimate(x)['estimated_tokens'] for x in outputs)
     return {**config, 'mode':'offline_mock', 'success':success, 'failure_details_preserved':failures_preserved,
+            'audit_complete':audit_complete, 'observed_audit':{k:v for k,v in report.items() if k != 'records'},
             'failure_recovery_verified':failure_recovery_verified,
-            'indexed_recoveries':report['indexed_recoveries'], 'index_build_bytes':report['index_build_bytes'],
-            'recovery_scanned_chars':report['scanned_chars'], 'recovery_latency_ms':report['recovery_latency_ms'],
+            'indexed_recoveries':measured('indexed_recoveries'), 'index_build_bytes':measured('index_build_bytes'),
+            'recovery_scanned_chars':measured('scanned_chars'), 'recovery_latency_ms':measured('recovery_latency_ms'),
             'initial_snapshot_sha256':initial, 'final_code_sha256':digest(project),
             'tool_calls':tools, 'original_tool_chars':sum(map(len,inputs)), 'visible_tool_chars':sum(map(len,outputs)),
             'estimated_original_tool_tokens':original_tokens, 'estimated_visible_tool_tokens':visible_tokens,
             'estimated_tool_token_reduction_ratio':1-visible_tokens/original_tokens if original_tokens else 0,
-            'estimate_method':estimate('')['method'], 'compressions':report['compressions'],
-            'recovery_count':report['recovery_count'], 'recovered_chars':report['returned_chars'],
+            'estimate_method':estimate('')['method'], 'compressions':measured('compressions'),
+            'recovery_count':measured('recovery_count'), 'recovered_chars':measured('returned_chars'),
             'total_task_tokens':'unavailable', 'actual_api_input_tokens':'unavailable',
             'actual_api_output_tokens':'unavailable', 'cache_read_tokens':'unavailable', 'cache_write_tokens':'unavailable',
             'cache_hit_ratio':'unavailable', 'actual_billed_cost':'unavailable', 'api_latency_ms':'unavailable'}
@@ -132,59 +137,48 @@ def run(output: Path, rounds: int = 3) -> Path:
     experiment = 'mock-'+uuid.uuid4().hex
     folder = output.resolve()/experiment
     folder.mkdir(parents=True,exist_ok=False)
-    rows = []
-    for repeat in range(1,rounds+1):
+    configs = []
+    for repeat in range(1, rounds+1):
         for case in CASES:
-            pair = []
-            for variant in ('baseline','optimized'):
-                project = folder/f'{case}-{repeat}-{variant}'
-                shutil.copytree(ROOT/'fixture',project,ignore=shutil.ignore_patterns('__pycache__','.pytest_cache'))
-                config = {'case':case,'round':repeat,'variant':variant,'project':str(project),
-                          'session_id':uuid.uuid4().hex,'experiment_id':experiment,'model':'deepseek-flash',
-                          'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),
-                          'base_config_sha256':hashlib.sha256(b'offline-mock-policy-v2-indexed-recovery').hexdigest()}
-                request = project/'request.json'
-                request.write_text(json.dumps(config),encoding='utf-8')
-                started = time.perf_counter()
-                # A separate process with a fresh UUID per arm, no --resume or shared conversation.
-                result = subprocess.run([sys.executable,str(Path(__file__).resolve()),'--worker',str(request)],capture_output=True,text=True,encoding='utf-8',timeout=150)
-                if result.returncode:
-                    raise RuntimeError(f'Mock worker failed: {case}/{variant}; exit {result.returncode}')
-                row = json.loads(result.stdout)
-                row['elapsed_ms'] = round((time.perf_counter()-started)*1000,3)
-                pair.append(row)
-            if pair[0]['initial_snapshot_sha256'] != pair[1]['initial_snapshot_sha256']:
-                raise ValueError('A/B snapshots differ')
-            for row in pair:
-                row['paired_final_code_equal'] = pair[0]['final_code_sha256'] == pair[1]['final_code_sha256']
-                row['success'] = row['success'] and row['paired_final_code_equal'] and row['failure_details_preserved']
-                rows.append(row)
-    aggregate = []
-    for case in CASES:
-        baseline = [r for r in rows if r['case']==case and r['variant']=='baseline']
-        optimized = [r for r in rows if r['case']==case and r['variant']=='optimized']
-        base_chars = statistics.mean(r['visible_tool_chars'] for r in baseline)
-        opt_chars = statistics.mean(r['visible_tool_chars'] for r in optimized)
-        aggregate.append({'case':case, 'pairs':rounds,
-                          'baseline_successes':sum(r['success'] for r in baseline),
-                          'optimized_successes':sum(r['success'] for r in optimized),
-                          'mean_character_reduction_after_recovery':1-opt_chars/base_chars,
-                          'baseline_mean_ms':statistics.mean(r['elapsed_ms'] for r in baseline),
-                          'optimized_mean_ms':statistics.mean(r['elapsed_ms'] for r in optimized),
-                          'optimized_time_stddev_ms':statistics.pstdev(r['elapsed_ms'] for r in optimized)})
-    (folder/'report.json').write_text(json.dumps({'experiment_id':experiment,'mode':'offline_mock','prompt':PROMPT,'aggregate':aggregate,'rows':rows},indent=2),encoding='utf-8')
-    with (folder/'report.csv').open('w',encoding='utf-8',newline='') as stream:
-        writer = csv.DictWriter(stream,fieldnames=list(rows[0]))
-        writer.writeheader(); writer.writerows(rows)
-    markdown = '# TokenGuard offline mock A/B\n\nThese are deterministic fixture/mock trials, not model or billing experiments. Each arm uses a new process/session and identical initial Python files.\n\n'
-    markdown += '|Case|Round|Arm|Success|Tool chars|Estimated tool tokens|Time ms|Recoveries|Index build bytes|Recovery scanned chars|\n|---|---:|---|---|---:|---:|---:|---:|---:|---:|\n'
-    for row in rows:
-        markdown += f"|{row['case']}|{row['round']}|{row['variant']}|{row['success']}|{row['visible_tool_chars']}|{row['estimated_visible_tool_tokens']}|{row['elapsed_ms']}|{row['recovery_count']}|{row['index_build_bytes']}|{row['recovery_scanned_chars']}|\n"
-    markdown += '\nPaired character reductions below include selective recovery output; they are not task token or cost reductions.\n\n'
-    for item in aggregate:
-        markdown += f"- {item['case']}: {item['mean_character_reduction_after_recovery']:.2%} mean character reduction; {item['optimized_successes']}/{rounds} mock successes.\n"
-    markdown += '\nTotal task/API tokens, cache usage, cache hit changes and actual billed costs: unavailable. Tool-only heuristic estimates cannot establish task-level savings. Timing includes Python/pytest startup and disk I/O; no API latency. The Python fix is scripted; AI repair quality is unmeasured.\n'
-    (folder/'report.md').write_text(markdown,encoding='utf-8')
+            for variant in (('baseline', 'optimized') if repeat % 2 else ('optimized', 'baseline')):
+                configs.append({'case':case, 'round':repeat, 'variant':variant,
+                    'project':str(folder/f'{case}-{repeat}-{variant}'),
+                    'session_id':uuid.uuid4().hex, 'experiment_id':experiment, 'model':'deepseek-flash',
+                    'prompt_sha256':hashlib.sha256(PROMPT.encode()).hexdigest(),
+                    'base_config_sha256':hashlib.sha256(b'offline-mock-policy-v3-complete-evidence-abba').hexdigest()})
+    rows = [unrun(config) for config in configs]
+    expected_snapshot = digest(ROOT/'fixture')
+    (folder/'plan.json').write_text(json.dumps({'trials':configs, 'initial_snapshot_sha256':expected_snapshot,
+                                               'model_api_calls':0}, indent=2)+'\n', encoding='utf-8')
+    env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTEST_DISABLE_PLUGIN_AUTOLOAD='1')
+    for index, config in enumerate(configs):
+        started = time.perf_counter()
+        project = Path(config['project'])
+        try:
+            shutil.copytree(ROOT/'fixture', project, ignore=shutil.ignore_patterns('__pycache__', '.pytest_cache'))
+            initial = digest(project)
+            if initial != expected_snapshot:
+                raise ValueError('Fixture changed after planning')
+            request = project/'request.json'
+            request.write_text(json.dumps(config), encoding='utf-8')
+            # A new bounded local process per arm; no model driver is involved.
+            process = run_process([sys.executable, '-X', 'utf8', str(Path(__file__).resolve()),
+                                   '--worker', str(request)], project, env, 150)
+            (project/'worker-process.json').write_text(json.dumps(process, allow_nan=False, indent=2), encoding='utf-8')
+            if (type(process.get('exit_code')) is not int or process['exit_code'] != 0 or
+                    process.get('timed_out') is not False or process.get('outputs_truncated') is not False):
+                raise RuntimeError('Worker process did not complete with intact output')
+            row = checked_worker(parse(process['stdout']), config, initial, digest(project))
+            row['elapsed_ms'] = round((time.perf_counter()-started)*1000, 3)
+            rows[index] = row
+        except Exception as exc:
+            rows[index].update(status='infrastructure_failed', failure_reason=type(exc).__name__,
+                               elapsed_ms=round((time.perf_counter()-started)*1000, 3))
+        # Always persist the full plan, even if the first process failed. Exception
+        # details/streams stay in the private run folder, never the public report.
+        export(folder, experiment, PROMPT, rows, CASES, rounds)
+        if rows[index]['status'] != 'completed':
+            break
     print(folder)
     return folder
 
@@ -200,7 +194,7 @@ def main() -> None:
     else:
         folder = run(args.output,args.rounds)
         rows = json.loads((folder/'report.json').read_text(encoding='utf-8'))['rows']
-        if not all(row['success'] for row in rows):
+        if not all(row['success'] is True and row['comparison_eligible'] is True for row in rows):
             raise SystemExit(1)
 
 if __name__ == '__main__':

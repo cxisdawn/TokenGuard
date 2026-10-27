@@ -2,6 +2,12 @@
 
 ## v0.4
 
+- Bind task validation to the files actually tested; recheck current candidate patches and archived grades before certifying report outcomes.
+- Reconcile observed streaming request identities with final usage; retain unfinished requests and prevent incomplete coverage from becoming task totals.
+- Preserve and revalidate session/request billing bindings; mark legacy unbound costs unavailable.
+- Export complete planned Mock/baseline study denominators after execution failures; distinguish unknown evidence, measured failure and eligible comparisons.
+- Revalidate cached audit measurements and keep missing counts unavailable with explicit coverage.
+
 - Derive missing legacy recovery context from a unique valid compression ID in memory, keeping scoped counts consistent without rewriting history or overriding explicit conflicts.
 
 - Validate audit rows before arithmetic or attribution; retain corrupt history, expose incomplete/unknown measurements and bound CLI record output.

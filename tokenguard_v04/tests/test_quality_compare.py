@@ -13,6 +13,7 @@ from unittest.mock import patch
 
 from tokenguard.experiment import BASE, prepare, write_json
 from tokenguard.visible_tests import fingerprint
+from tokenguard.swebench_quality import candidate_patch
 from test_quality_protocol import fixture_receipt, tool_trace
 
 SCRIPT = BASE / 'benchmark/quality_compare.py'
@@ -65,19 +66,25 @@ def add_results(folder: Path, *, broken=False) -> None:
     for trial in record['trials']:
         root = folder / 'trials' / trial['trial_id']
         compressed = trial['arm'] == 'optimized'
+        (root / 'worktree/pylint/value.py').write_text('VALUE = 2\n', encoding='utf-8')
         row = {**trial, 'task_success': True, 'grade': {'resolved': True, 'evaluation_valid': True, 'tests_status': {}},
                'source_changes': {'only_allowed_changes': True, 'changed_files': ['pylint/value.py']},
                'agent_exit_code': 0, 'agent_elapsed_ms': 100, 'tool_calls': 1,
-               'compression': {'compressions': int(compressed), 'recovery_count': 0, 'saved_chars': 10},
+               'timed_out': False, 'outputs_truncated': False, 'stage_errors': [],
+               'compression': {'compressions': int(compressed), 'recovery_count': 0, 'saved_chars': 10 if compressed else 0},
                'protocol_evidence': {'agent_test_protocol_satisfied': True,
                                      'native_compressions_in_matching_bash_results': int(compressed)},
                'model_cited_matching_metadata_count': 0, 'cli_aggregate_usage_unverified': {'input_tokens': 10}}
         write_json(root / 'quality-result.json', row)
+        (root / 'evaluation').mkdir()
+        (root / 'evaluation/candidate.patch').write_bytes(candidate_patch(folder, record, root / 'worktree')[0].encode('utf-8'))
+        write_json(root / 'evaluation/grade.json', row['grade'])
         guide = '[TokenGuard artifact=' + 'a' * 64 + '; compression_id=' + 'b' * 32 + ']'
         events = []
         for run_id, key in (('c' * 32, 't'), ('d' * 32, 'last')):
             _, text = fixture_receipt(root / 'test-receipts', run_id=run_id,
-                source=fingerprint(root / 'worktree', record['task']['editable_files']),
+                source=fingerprint(folder / 'snapshot' if key == 't' else root / 'worktree',
+                                   record['task']['editable_files']),
                 session_id=trial['session_id'], experiment_id=record['experiment_id'], image_id='no-real-image')
             events += tool_trace(run_id, key, text=text + (guide if compressed else 'NO_RAW_EXPORT'))
         for event in events:
@@ -250,10 +257,11 @@ class TestQualityScorecard(unittest.TestCase):
                 elif damage == 'tampered':
                     receipt.with_suffix('.stdout.txt').write_bytes(b'changed evidence')
                 else:
-                    (trial / 'worktree/pylint/value.py').write_text('VALUE = 2\n')
+                    (trial / 'worktree/pylint/value.py').write_text('VALUE = 3\n')
                 items, _ = API['collect']([folder])
                 group = API['scorecard'](items)['cohorts'][0]
-                self.assertEqual(group['all_planned_code_outcomes']['both_resolved'], 1)
+                outcome = 'ungraded_or_incomplete' if damage == 'wrong_source' else 'both_resolved'
+                self.assertEqual(group['all_planned_code_outcomes'][outcome], 1)
                 self.assertEqual(group['compression_evidence_subset']['pairs'], 0)
                 self.assertFalse(items[0]['analysis']['runs'][1]['test_protocol_satisfied'])
 

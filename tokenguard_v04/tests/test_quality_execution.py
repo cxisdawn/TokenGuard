@@ -61,9 +61,12 @@ def cli_command(folder, record, trial, driver, executable):
 def fixture_grade(folder, plan, row, patch_text, output):
     output.mkdir()
     check = validate(folder / 'snapshot', output.parent / 'worktree', record_for(folder)['task'], output)
-    return {'resolved': bool(patch_text) and check['passed'],
+    result = {'resolved': bool(patch_text) and check['passed'],
             'evaluation_valid': not check['timed_out'] and not check['outputs_truncated'],
             'tests_status': {}, 'source': 'actual local pristine pytest fixture, NOT official grader'}
+    (output / 'candidate.patch').write_bytes(patch_text.encode('utf-8'))
+    write_json(output / 'grade.json', result)
+    return result
 
 
 def record_for(folder):
@@ -244,7 +247,13 @@ class TestQualityExecution(unittest.TestCase):
     def test_read_only_analysis_rechecks_manual_counts_and_cached_seed_availability(self):
         from tokenguard import audit
         from tokenguard.experiment import audit_scope
-        grade = lambda *args: {'resolved': False, 'evaluation_valid': True, 'tests_status': {}}
+        def grade(folder, plan, row, patch_text, output):
+            result = {'resolved': False, 'evaluation_valid': True, 'tests_status': {},
+                      'source': 'synthetic audit fixture; no grading process'}
+            output.mkdir()
+            (output / 'candidate.patch').write_bytes(patch_text.encode('utf-8'))
+            write_json(output / 'grade.json', result)
+            return result
         for change in ('compression', 'recovery', 'cached_unavailable', 'unchanged'):
             with self.subTest(change=change), experiment() as (folder, record, plan), \
                  adapters(folder, record, plan, grade=grade):
@@ -274,6 +283,9 @@ class TestQualityExecution(unittest.TestCase):
                 self.assertTrue(current['data_available'])
                 self.assertEqual(current['compressions'], 1)
                 self.assertEqual(current['recovery_count'], int(change == 'recovery'))
+                if change == 'unchanged':
+                    saved['seed_compression'] = {key: value for key, value in current.items() if key != 'records'}
+                    write_json(path, saved)
                 before = path.read_bytes()
                 read = analyze(folder)
                 first = read['runs'][0]

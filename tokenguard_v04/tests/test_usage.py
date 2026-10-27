@@ -91,7 +91,8 @@ class TestUsage(unittest.TestCase):
         row=copy.deepcopy(self.responses[0]); row['usage']['completion_tokens']+=1; row['usage']['total_tokens']+=1
         with self.assertRaises(ValueError): self.imported(self.responses+[row])
     def test_stream_final_usage_only(self):
-        early={'object':'chat.completion.chunk','usage':None,'id':'r1'}
+        early={'object':'chat.completion.chunk','usage':None,'id':self.responses[0]['id'],
+               'model':'deepseek-flash'}
         final=copy.deepcopy(self.responses[0]); final['object']='chat.completion.chunk'; final['choices']=[{'finish_reason':'stop'}]
         m={**self.manifest,'expected_request_count':1}
         result=self.imported([early,final,copy.deepcopy(final)],m)

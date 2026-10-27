@@ -1,4 +1,5 @@
 """Offline contracts for the opt-in quality pilot; no Docker/model dependency."""
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -84,16 +85,30 @@ class TestQualityPilot(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             folder = Path(temporary)
             trial = {'trial_id': '001-optimized', 'pair_id': 'round-001', 'arm': 'optimized', 'session_id': 's'}
-            (folder / 'experiment.json').write_text(json.dumps({'experiment_id': 'e', 'trials': [trial]}))
+            record = {'experiment_id': 'e', 'trials': [trial],
+                      'task': {'files': ['pylint/x.py'], 'editable_files': ['pylint/x.py']},
+                      'files_sha256': {'pylint/x.py': hashlib.sha256(b'VALUE = 1\n').hexdigest()}}
+            (folder / 'experiment.json').write_text(json.dumps(record))
             (folder / 'quality-plan.json').write_text(json.dumps({'instance_id': 'fixture'}))
             root = folder / 'trials' / trial['trial_id']
             root.mkdir(parents=True)
+            (folder / 'snapshot/pylint').mkdir(parents=True)
+            (folder / 'snapshot/pylint/x.py').write_bytes(b'VALUE = 1\n')
+            (root / 'worktree/pylint').mkdir(parents=True)
+            (root / 'worktree/pylint/x.py').write_bytes(b'VALUE = 2\n')
             row = {**trial, 'grade': {'resolved': True, 'evaluation_valid': True, 'tests_status': {}},
                    'task_success': False, 'agent_exit_code': 1, 'agent_elapsed_ms': 1, 'tool_calls': 2,
+                   'timed_out': False, 'outputs_truncated': False,
                    'compression': {'compressions': 0, 'recovery_count': 0, 'saved_chars': 0},
                    'source_changes': {'changed_files': ['pylint/x.py'], 'only_allowed_changes': True},
                    'model_cited_matching_metadata_count': 0, 'cli_aggregate_usage_unverified': {}}
             (root / 'quality-result.json').write_text(json.dumps(row))
+            # Synthetic independent-grade evidence is separate from agent exit.
+            # It must describe the exact retained candidate, just as a real run does.
+            (root / 'evaluation').mkdir()
+            (root / 'evaluation/candidate.patch').write_bytes(
+                candidate_patch(folder, record, root / 'worktree')[0].encode('utf-8'))
+            (root / 'evaluation/grade.json').write_text(json.dumps(row['grade']))
             (root / 'agent.stream.jsonl').write_text(json.dumps({'type': 'result', 'session_id': 's',
                                                                'subtype': 'error_max_turns'}) + '\n')
             result = analyze(folder)

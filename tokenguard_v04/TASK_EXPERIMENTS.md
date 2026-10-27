@@ -120,6 +120,8 @@ manifest 的会话、模型、Prompt/快照/配置哈希和验收结果来自该
 
 再次运行 `report` 后生成 `report.json`、`report.csv`、`report.md`。两组都有 usage 时另生成配对比较报告。字段区分：
 
+报告重新核对当前候选和实际受测白名单文件的 Hash，以及当前审计和执行状态。旧运行缺少受测文件绑定或当前文件已变化时，保留 `reported_task_success`，当前 `task_success` 为 null，不将它纳入质量通过的配对；不能通过补写旧字段升级证据。详见 [报告证据校验](REPORT_RELIABILITY.md)。
+
 |指标|来源和边界|
 |---|---|
 |任务成功、测试通过、受保护文件未改|本机独立验收|
