@@ -2,6 +2,8 @@
 
 ## v0.4
 
+- Canonicalize snapshot comparison roots after checking real links/reparse attributes; preserve valid Windows 8.3 aliases and reject linked roots.
+
 - Bind task validation to the files actually tested; recheck current candidate patches and archived grades before certifying report outcomes.
 - Reconcile observed streaming request identities with final usage; retain unfinished requests and prevent incomplete coverage from becoming task totals.
 - Preserve and revalidate session/request billing bindings; mark legacy unbound costs unavailable.

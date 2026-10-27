@@ -6,6 +6,8 @@ from pathlib import Path, PurePosixPath
 import re
 from typing import Any
 
+from .visible_tests import canonical_path
+
 FORBIDDEN = {'.git','.claude','.codex','.aws','.ssh','.venv','venv','__pycache__','.pytest_cache',
              'reports','artifacts','.tokenguard','node_modules'}
 PRIVATE_SUFFIXES = {'.pem','.key','.pfx','.p12','.zip','.exe','.msi','.jsonl','.log'}
@@ -121,6 +123,10 @@ def write_snapshot(folder: Path, payload: dict[str,bytes]) -> None:
 
 
 def changes(folder: Path, expected: dict[str,str], editable: list[str]) -> dict:
+    # Compare descendants of one canonical root: Windows 8.3 aliases are
+    # alternate spellings, not links. Check actual reparse/link attributes
+    # before resolving so a linked root is still rejected.
+    folder = canonical_path(folder)
     altered=[]; missing=[]; unexpected=[]
     for name,wanted in expected.items():
         try:
