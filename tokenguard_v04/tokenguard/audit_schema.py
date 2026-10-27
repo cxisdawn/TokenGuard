@@ -126,6 +126,13 @@ def validated(rows: list[dict]) -> AuditIndex:
             if owner is None or not compatible(row, owner):
                 result.invalid_rows += 1
                 continue
+            # Legacy rows can omit context even though their explicit ID has a
+            # unique valid owner. Derive only missing keys in a separate view;
+            # explicit null/mismatched values were rejected above.
+            derived = {key: owner[key] for key in ('session_id', 'experiment_id', 'artifact_id')
+                       if key not in row and key in owner}
+            if derived:
+                row = {**row, **derived, 'derived_context_fields': sorted(derived)}
         recoveries.append(row)
     result.recoveries = recoveries
     for identity, row in list(result.deliveries.items()):

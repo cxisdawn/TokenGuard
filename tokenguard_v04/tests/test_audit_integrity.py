@@ -368,3 +368,36 @@ def test_standard_json_exponent_overflow_in_nested_metadata_is_rejected(data):
     result = audit.summary()
     assert result['malformed_rows'] == 1 and result['compressions'] == 0
     json.dumps(result, allow_nan=False)
+
+
+@pytest.mark.parametrize('scope', [{}, {'source': 'manual'}, {'session_id': 's1'},
+    {'experiment_id': 'e1'}, {'session_id': 's1', 'experiment_id': 'e1'},
+    {'session_id': 's1', 'experiment_id': 'e1', 'source': 'manual'}])
+def test_legacy_recovery_derives_missing_context_from_unique_owner(data, scope):
+    row = {'event': 'recovery', 'compression_id': 'c1', 'returned_chars': 7}
+    write_rows(data, compression(), row)
+    before = (data/'audit-v04.jsonl').read_bytes()
+    result = audit.summary(**scope)
+    assert result['recovery_count'] == 1 and result['returned_chars'] == 7
+    assert result['records'][0]['recovery_count'] == 1
+    assert result['data_available'] is True
+    assert (data/'audit-v04.jsonl').read_bytes() == before
+    assert audit.events()[0][1] == row
+
+
+@pytest.mark.parametrize('field', ['session_id', 'experiment_id', 'artifact_id'])
+def test_explicit_null_context_is_not_derived_from_owner(data, field):
+    row = {'event': 'recovery', 'compression_id': 'c1', 'returned_chars': 7, field: None}
+    write_rows(data, compression(), row)
+    result = audit.summary(session_id='s1', experiment_id='e1')
+    assert result['recovery_count'] == 0 and result['invalid_rows'] == 1
+    assert result['data_available'] is False
+
+
+def test_derived_recovery_view_never_mutates_input_rows(data, monkeypatch):
+    row = {'event': 'recovery', 'compression_id': 'c1', 'returned_chars': 7}
+    rows = [compression(), row]
+    before = json.dumps(rows, sort_keys=True)
+    monkeypatch.setattr(audit, 'events', lambda: (rows, 0))
+    assert audit.summary(session_id='s1')['returned_chars'] == 7
+    assert json.dumps(rows, sort_keys=True) == before

@@ -26,6 +26,8 @@ JSONL 逐行以 UTF-8 解码，只在文件头接受 BOM；每行最多 256 KiB�
 
 缺少压缩 ID 的恢复不会通过 `None == None` 关联。明确给出 session、experiment、artifact 时必须与候选一致。同一 Artifact 无归属参数的读取始终记为未归属，不猜测调用者；需要统计到具体会话时传 `--compression-id`。损坏审计不阻断完好原文的无归属读取；显式指定无效或冲突的压缩身份会失败，避免错误归属。
 
+旧恢复记录如果有唯一合法压缩 ID，却缺少上述上下文字段，则只在内存统计视图中从该候选补齐缺失字段，并标记 `derived_context_fields`；显式提供的不一致值不会被覆盖。全局、会话、实验及 source 过滤应得到一致归属，原始 JSONL 和输入对象保持不变。
+
 报告分别给出 `malformed_rows`、`invalid_rows`、`duplicate_rows`、`conflicting_rows`。发现这些问题时 `data_available=false`，仍展示有效观察，但这些值不代表完整总量。无法识别归属的坏行可能来自任何会话，因此完整性告警是整份审计文件级别，不会被 session/source 过滤隐藏。
 
 Token 估算缺失显示 null/unavailable，并提供覆盖计数；历史恢复缺少扫描量或耗时，也不补成零。`stats --json` 默认只返回最近 20 条候选，`--limit-records 0..100` 控制返回条数，所有范围内的有效记录仍参与汇总。该限制控制输出大小，不限制历史文件扫描总量或内存；目前没有审计轮转和历史索引功能。

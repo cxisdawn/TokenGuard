@@ -2,6 +2,8 @@
 
 ## v0.4
 
+- Derive missing legacy recovery context from a unique valid compression ID in memory, keeping scoped counts consistent without rewriting history or overriding explicit conflicts.
+
 - Validate audit rows before arithmetic or attribution; retain corrupt history, expose incomplete/unknown measurements and bound CLI record output.
 - Serialize appenders with timed OS locks, preserve truncated tails with a new boundary, and deduplicate only explicit event identities.
 - Separate prepared compression candidates from successful stdout writes and unknown host acceptance; handle strict JSON, short writes and broken pipes.
