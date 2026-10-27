@@ -14,7 +14,7 @@ SCRIPT = Path(__file__).resolve().parents[1] / 'tokenguard/hook.py'
 
 
 def command(script: Path = SCRIPT, extra: str = '') -> str:
-    paths = [Path(sys.executable).as_posix(), script.as_posix()]
+    paths = [Path(sys.executable).resolve().as_posix(), script.as_posix()]
     encoded = ' '.join('"' + path + '"' for path in paths) if os.name == 'nt' else ' '.join(map(shlex.quote, paths))
     return encoded + ' --tokenguard-v04 --source claude_hook' + extra
 
