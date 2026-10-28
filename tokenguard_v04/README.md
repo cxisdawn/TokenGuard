@@ -71,6 +71,8 @@ doctor 只读已注册的项目 Hook，验证解释器和脚本路径，在临�
 
 恢复现核对内容寻址身份，首次完整 SHA256，后续重验本次涉及的块；全量读取单独计量，损坏原文拒绝返回并保留。并发发布不覆盖已有 Artifact，缓存不可写时完整核验。见 [Artifact 完整性与限制](ARTIFACT_INTEGRITY.md)。
 
+完整结果恰好装满返回预算时，不再额外生成续读请求；仍有未搜索内容时明确标记截断。预算不足以显示完整状态时，CLI 返回 2、stdout 为空，不记录成功恢复。字符预算包含正文、行号及续读元信息，详见上述文档的“返回预算与续读”。
+
 ```powershell
 $Id = 'ARTIFACT_SHA256'
 $CompressionId = 'COMPRESSION_ID'

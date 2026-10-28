@@ -262,7 +262,7 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                     selected = [(number, column, line, None)]
                     tail -= 1
                 before.append((number, column, line, None))
-            for n, col, value, span in selected:
+            for selected_index, (n, col, value, span) in enumerate(selected):
                 if n <= last_emitted:
                     continue
                 notice = context_notice if span is not None else ''
@@ -291,9 +291,18 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                 emitted += len(used)
                 last_emitted = n
                 if emitted == max_chars:
-                    truncated = True
+                    # Capacity alone does not imply missing requested content.
+                    # Distinguish a cut record/pending selection from an exact
+                    # fit at the requested end or EOF. One-character lookahead
+                    # is measured and later covered by integrity verification.
+                    truncated = (len(used) < len(prefix)+len(value) or scan_limited
+                                 or selected_index+1 < len(selected))
+                    if not truncated and (window_end is None or number < window_end):
+                        lookahead = stream.read(1)
+                        scanned += len(lookahead)
+                        truncated = bool(lookahead)
                     break
-            if truncated:
+            if truncated or emitted == max_chars:
                 break
             if scan_limited:
                 truncated = True
@@ -329,7 +338,8 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
         if (resume_line, resume_char) <= (start, char_offset):
             raise RecoveryLimitError('scan limit prevents reaching or advancing the requested cursor; '
                                      'enable or repair the artifact index')
-    result = result[:max_chars]
+    if len(result) > max_chars:
+        raise RecoveryLimitError('max_chars is too small for the complete recovery status')
     append({'event': 'recovery', 'artifact_id': identifier, 'mode': mode,
             **integrity,
             'compression_id': owner.get('compression_id'), 'session_id': owner.get('session_id'),
