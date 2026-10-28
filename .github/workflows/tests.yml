@@ -36,6 +36,9 @@ jobs:
       - name: Actual unittest output and diagnostic preservation
         working-directory: tokenguard_v04
         run: python benchmark/unittest_contracts.py
+      - name: Offline build and pip output contracts
+        working-directory: tokenguard_v04
+        run: python benchmark/build_pip_contracts.py
       - name: Local tool and selective recovery examples
         working-directory: tokenguard_v04
         run: python benchmark/examples.py

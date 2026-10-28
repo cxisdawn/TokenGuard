@@ -8,6 +8,8 @@ pytest 提供 [compact / indexed / off 三种模式](PYTEST_NAVIGATION.md)：默
 
 unittest 新增 [真实输出验证与保守识别](UNITTEST_SAFETY.md)：文档说明、未完成标题和独立状态触发整段透传；只聚合明确成功记录，报告区及后文保留。`python -X utf8 benchmark/unittest_contracts.py` 可复现真实本地 unittest、手动 Hook 和原文恢复检查，不启动模型。
 
+构建/pip 新增 [离线实际工具输出评测](BUILD_PIP_CONTRACTS.md)：执行 `python -X utf8 benchmark/build_pip_contracts.py`，验证 Python 编译、本地 wheel 安装、真实 pip renderer 和明确标注的混合诊断。全程无下载、不安装到当前环境；报告区分原生 stderr、合并流与换行变体，不代表编码质量测评。
+
 新增 [独立原文恢复评测](RECOVERY_CONTRACTS.md)：运行 `python -X utf8 benchmark/recovery_contracts.py`，67 项检查 show 重建、grep 命中行可达、预算、游标及审计，生成 JSON/CSV/Markdown。固定输入与历史版本负对照已验证；不启动模型、不读取用户历史 Artifact。修复小预算下部分行号标签，29 项新增测试及完整回归通过。
 
 原文恢复新增 [扫描完成状态与命中窗口验证](ARTIFACT_INTEGRITY.md#扫描上限与命中窗口)：扫描量恰好达到上限时检查实际 EOF，匹配行与续读元数据争用预算时保留完整关键词窗口。69 项针对性测试包含默认 8 MiB 的实际 CLI 和连续分页独立核对；无需修改已安装的 Hook 配置。

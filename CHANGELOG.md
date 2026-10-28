@@ -1,5 +1,13 @@
 # Changelog
 
+## 2026-10-28 — 构建与 pip 实际本地输出验证
+
+- 新增 10 类、56 项离线输出检查，区分真实 compileall、临时 target 的 pip 安装/错误、真实 pip renderer 和明确标记的混合日志；不执行下载或模型调用。
+- 核对编译/安装产物、响应结构、诊断序列、重复记录可展开性、原文字节、选择性恢复及审计计数；输出 JSON/CSV/Markdown，失败保留完整分母。
+- 新增评测器负对照，主动注入前缀删诊断、清空 stderr 和损坏审计，防止仅验证成功分支。CI 四组矩阵加入独立评测命令。
+- 将 Python compileall/py_compile 命令审计分类修正为 build；重复压缩行为不变。范围与复现见 [本地构建/pip 验证](tokenguard_v04/BUILD_PIP_CONTRACTS.md)。
+- 新增 25 项回归，完整结果 1150 passed、1 skipped、406 subtests passed；56/56 输出检查通过，94 个 Python 文件验证前后 Hash 一致。没有新增真实编码质量或费用结论。
+
 ## 2026-10-28 — unittest 输出保护
 
 - 用独立解析模块替换宽松成功行匹配，保留未知记录、重要状态及整个报告尾部。

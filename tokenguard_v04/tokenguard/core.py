@@ -36,7 +36,7 @@ def command_type(command: str) -> str:
     for kind, pattern in [('pytest', r'\bpytest\b'), ('unittest', r'\bunittest\b'),
                           ('pip', r'\bpip(?:3)?\s+install\b'),
                           ('search', r'\brg\s+--files\b|\bfind\s+.+\s-type\s+f\b'),
-                          ('build', r'\b(?:build|compile|make|cmake|ninja|msbuild|webpack)\b')]:
+                          ('build', r'\b(?:build|compile|compileall|py_compile|make|cmake|ninja|msbuild|webpack)\b')]:
         if re.search(pattern, command, re.I):
             return kind
     return 'generic'
