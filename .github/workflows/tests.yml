@@ -33,6 +33,9 @@ jobs:
       - name: Selective recovery contracts and bounded pagination
         working-directory: tokenguard_v04
         run: python benchmark/recovery_contracts.py
+      - name: Actual unittest output and diagnostic preservation
+        working-directory: tokenguard_v04
+        run: python benchmark/unittest_contracts.py
       - name: Local tool and selective recovery examples
         working-directory: tokenguard_v04
         run: python benchmark/examples.py

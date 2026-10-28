@@ -3,6 +3,7 @@ import io
 import re
 
 from .pytest_index import PassedIndex, base_node
+from .unittest_progress import summarize as summarize_unittest
 
 PROTECTED = re.compile(r'error|fail|exception|traceback|assert|fatal|denied|critical|^\s*at\s+|^\s*File\s+"', re.I)
 WARNING = re.compile(r'\bwarning\b', re.I)
@@ -20,7 +21,6 @@ PYTEST_LIVE_CAPTURE = re.compile(
     r'''(?:^|[\s"'=])(?:-[A-Za-z]*s[A-Za-z]*(?=$|[\s"'])|--capture(?:=|[ \t]+)["']?(?:no|tee-sys)(?=$|[\s"']))''')
 TRACEBACK = re.compile(r'Traceback \(most recent call last\)|ExceptionGroup Traceback', re.I)
 DIFF_HEADER = re.compile(r'(?m)^diff (?:--git|--cc|--combined)|^@@|^--- |^\+\+\+ |^GIT binary patch|^Binary files .* differ')
-UNIT_PASS = re.compile(r'^\S+ \([^\n]+\)(?:\s+\.\.\.)? \.\.\. ok\s*$')
 DETAIL = re.compile(r'^\s*(?:=+\s*(?:FAILURES|ERRORS|short test summary)|_{3,}|FAIL:|ERROR:)', re.I)
 PIP_PROGRESS = re.compile(
     r'[ \t]*[━─█=\-]+[ \t]+'
@@ -168,7 +168,9 @@ def compress(text: str, min_chars: int = 3000, max_ratio: float = 0.85,
     elif kind == 'unittest':
         if not re.search(r'(?m)^Ran \d+ tests? in [\d.]+s\s*$', clean) or not re.search(r'(?m)^(?:OK(?: \(.*\))?|FAILED \(.*\))\s*$', clean):
             return text, 'incomplete_unittest'
-        candidate = _aggregate(text, UNIT_PASS, 'unittest ok')
+        candidate = summarize_unittest(text)
+        if candidate is None:
+            return text, 'ambiguous_unittest_output'
         strategy = 'unittest_pass_summary'
     elif kind == 'pip':
         # Require a whole known progress record. A bar/speed prefix alone may

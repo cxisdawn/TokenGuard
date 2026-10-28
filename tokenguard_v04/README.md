@@ -6,6 +6,8 @@ pytest 提供 [compact / indexed / off 三种模式](PYTEST_NAVIGATION.md)：默
 
 当前版本说明；项目概览和环境创建步骤见[根 README](../README.md)。
 
+unittest 新增 [真实输出验证与保守识别](UNITTEST_SAFETY.md)：文档说明、未完成标题和独立状态触发整段透传；只聚合明确成功记录，报告区及后文保留。`python -X utf8 benchmark/unittest_contracts.py` 可复现真实本地 unittest、手动 Hook 和原文恢复检查，不启动模型。
+
 新增 [独立原文恢复评测](RECOVERY_CONTRACTS.md)：运行 `python -X utf8 benchmark/recovery_contracts.py`，67 项检查 show 重建、grep 命中行可达、预算、游标及审计，生成 JSON/CSV/Markdown。固定输入与历史版本负对照已验证；不启动模型、不读取用户历史 Artifact。修复小预算下部分行号标签，29 项新增测试及完整回归通过。
 
 原文恢复新增 [扫描完成状态与命中窗口验证](ARTIFACT_INTEGRITY.md#扫描上限与命中窗口)：扫描量恰好达到上限时检查实际 EOF，匹配行与续读元数据争用预算时保留完整关键词窗口。69 项针对性测试包含默认 8 MiB 的实际 CLI 和连续分页独立核对；无需修改已安装的 Hook 配置。
@@ -37,7 +39,7 @@ v0.1–v0.3 Hook 不会被自动删除。若同项目仍有 v0.3 条目，应先
 |日志|策略与限制|
 |---|---|
 |pytest -v|命令和完成汇总匹配后聚合可信 Python 节点的 PASSED；保留其他状态、未知行和汇总；警告、捕获输出及报告段不聚合；实时输出歧义时整段透传|
-|unittest -v|需 Ran 汇总及 OK/FAILED；仅聚合标准成功行；常见 unittest 默认写 stderr，Hook 对 stderr 原样保留|
+|unittest -v|需 Ran 汇总及 OK/FAILED；仅聚合可信标准成功行；报告尾部保留；文档/实时输出歧义时整段透传；默认 stderr 原样保留|
 |构建/重复警告|仅按 CR/LF/CRLF 折叠相邻完全相同的非严重记录；行内控制字符不作为记录边界，严重记录整条保留|
 |pip install|仅聚合整条匹配的已知进度格式；保留同一行内的错误、警告、未知尾部、版本和安装结果|
 |文件搜索|只对明确文件名列表压缩，内容搜索和未知格式不截断|

@@ -95,3 +95,13 @@ def test_missing_implementation_is_saved_as_failed_evidence(tmp_path):
     assert result["source_unchanged_during_run"] is False
     assert result["input_errors"] == ["initial source unavailable: FileNotFoundError"]
     assert result["rows"] == []
+
+
+def test_pytest_evaluator_reads_long_generated_artifact_path(tmp_path, monkeypatch):
+    from tokenguard.storage import save_original
+    data = tmp_path / ('deep-' + 'x' * 140) / ('nested-' + 'y' * 40)
+    monkeypatch.setenv('TOKENGUARD_DATA_DIR', str(data))
+    identifier = save_original('synthetic pytest original\r\n')
+    target = data / 'artifacts' / (identifier + '.txt')
+    assert len(str(target)) > 260
+    assert API['artifact_bytes'](target) == b'synthetic pytest original\r\n'

@@ -30,6 +30,7 @@ Push-Location .\tokenguard_v04
 & $Python -m pytest -q
 & $Python .\verify_hook.py
 & $Python -X utf8 .\benchmark\pytest_contracts.py
+& $Python -X utf8 .\benchmark\unittest_contracts.py
 & $Python -X utf8 .\benchmark\recovery_contracts.py
 & $Python .\benchmark\examples.py
 & $Python .\benchmark\usage_demo.py
@@ -59,7 +60,7 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-2026-10-28 本地当前版本回归 **1061 passed、1 skipped、406 subtests passed**；新增独立原文恢复评测 **67/67 通过**，覆盖逐字符重建、关键词命中行可达、分页预算与审计。相同评测器和样例对历史版本检出 6 项失败；本轮修复小预算分页留下部分行号标签的问题，新增 29 项测试。手动 Hook 和三轮 Mock 30/30 通过；前阶段实际 pytest、13 个本地例子、上下文漏检、扫描 EOF、Windows 长路径及并发验证保留，原失败报告不回写。首次完整核验开销单独列出，旧测量缺失保持 unavailable。真实 UNC 共享、任意外部工具及无限长路径不在验证范围。本轮未调用模型；软件测试不能证明编码能力无损或真实费用节省。详细范围及失败复现见 [验证记录](docs/VALIDATION.md)。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端状态以 Actions 为准。
+2026-10-28 本地当前版本回归 **1125 passed、1 skipped、406 subtests passed**；本轮新增 64 项测试，收紧 unittest 成功记录识别、保护报告尾部及文档/实时输出，并修复评测器自身的长路径读取。真实本地 unittest 评测 **74/74**，独立恢复评测 **67/67**；相同原文的六类旧/新回放验证五类内容丢失修复及一类新增保守透传。手动 Hook、实际 pytest 108 项、13 个本地例子及三轮 Mock 的详细结果与失败记录见 [验证记录](docs/VALIDATION.md)。前阶段上下文漏检、扫描 EOF、Windows 长路径和并发验证保留，原失败报告不回写。首次完整核验开销单独列出，旧测量缺失保持 unavailable。真实 UNC 共享、任意外部工具及无限长路径不在验证范围。本轮未调用模型；软件测试不能证明编码能力无损或真实费用节省。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端状态以 Actions 为准。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
@@ -81,6 +82,7 @@ $Project = 'C:\work\my-project'
 
 ## 文档
 
+- [unittest 输出保护及真实本地验证](tokenguard_v04/UNITTEST_SAFETY.md)
 - [独立原文恢复评测及历史负对照](tokenguard_v04/RECOVERY_CONTRACTS.md)
 - [Artifact 完整性、并发保存与恢复读取开销](tokenguard_v04/ARTIFACT_INTEGRITY.md)
 

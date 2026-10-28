@@ -124,6 +124,15 @@ def physical_lines(text: str) -> list[str]:
     return list(io.StringIO(text, newline=""))
 
 
+def artifact_bytes(path: Path) -> bytes:
+    # Keep this evaluator independent of the implementation's path helpers.
+    # Generated report directories can exceed the ordinary Win32 path limit.
+    name = str(path.absolute())
+    if os.name == 'nt' and not name.startswith('\\\\?\\'):
+        name = '\\\\?\\UNC\\' + name[2:] if name.startswith('\\\\') else '\\\\?\\' + name
+    return Path(name).read_bytes()
+
+
 def contract_errors(raw: str, delivered: str, markers: tuple[str, ...]) -> list[str]:
     """Check complete diagnostic lines with multiplicity, independent of parser."""
     errors = []
@@ -202,7 +211,7 @@ def check_hook(case: Case, raw: str, stderr: str, mode: str, folder: Path,
             errors.append("net saving or compression audit violated")
         record = stats["records"][0]
         identifier, cid = record["artifact_id"], record["compression_id"]
-        artifact_exact = (folder / "data/artifacts" / (identifier + ".txt")).read_bytes() == raw.encode("utf-8")
+        artifact_exact = artifact_bytes(folder / "data/artifacts" / (identifier + ".txt")) == raw.encode("utf-8")
         if not artifact_exact:
             errors.append("artifact bytes differ")
         if record.get("source") != "manual":
