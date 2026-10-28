@@ -24,6 +24,7 @@ htmlcov/
 reports/
 artifacts/
 indexes-v04/
+integrity-v04/
 tg-data/
 .tokenguard/
 *.jsonl

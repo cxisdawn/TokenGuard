@@ -35,7 +35,17 @@ def canonical_path(path: Path) -> Path:
             continue
         if attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT, including junctions
             raise ValueError('Path links or reparse points are forbidden')
-    return path.resolve()
+    resolved = path.resolve()
+    # Windows may retain the extended-length prefix during a sharing race.
+    # Normalize its spelling so equal paths still compare equal; all reparse
+    # checks above happen before resolution and are never skipped.
+    if os.name == 'nt':
+        value = str(resolved)
+        if value.startswith('\\\\?\\UNC\\'):
+            return Path('\\\\' + value[8:])
+        if value.startswith('\\\\?\\'):
+            return Path(value[4:])
+    return resolved
 
 
 def fingerprint(root: Path, files: list[str] | tuple[str, ...]) -> str:

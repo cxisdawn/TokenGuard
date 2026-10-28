@@ -32,9 +32,19 @@ def valid(row: dict) -> bool:
             return False
     for key in ('original_chars', 'optimized_chars', 'saved_chars', 'recovery_count', 'returned_chars',
                 'scanned_chars', 'index_build_bytes', 'seek_offset_bytes', 'windowed_matches',
-                'omitted_context_lines', 'requested_start_char'):
+                'omitted_context_lines', 'requested_start_char', 'integrity_build_bytes',
+                'integrity_checked_bytes'):
         if key in row and not count(row[key]):
             return False
+    if 'integrity_status' in row and row['integrity_status'] not in ('built', 'reused', 'uncached'):
+        return False
+    if 'requested_start_line' in row and (not count(row['requested_start_line']) or row['requested_start_line'] == 0):
+        return False
+    for key in ('requested_end_line', 'next_start_line'):
+        if key in row and row[key] is not None and (not count(row[key]) or row[key] == 0):
+            return False
+    if 'next_start_char' in row and row['next_start_char'] is not None and not count(row['next_start_char']):
+        return False
     for key in ('compression_latency_ms', 'recovery_latency_ms', 'compression_ratio'):
         if key in row and not number(row[key]):
             return False

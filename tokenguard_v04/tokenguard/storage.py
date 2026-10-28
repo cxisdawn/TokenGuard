@@ -9,10 +9,18 @@ from dataclasses import dataclass
 from pathlib import Path
 from .audit import append, recovery_owner, root_dir
 from .line_index import ensure_index, Position, _fingerprint, _same_file_state
+from .artifact_integrity import verify_range, IntegrityError
+from .visible_tests import canonical_path
 
 ID_RE = re.compile(r'^[0-9a-f]{64}$')
 MAX_CHARS = 12000
 MAX_SCAN = 8 * 1024 * 1024
+MAX_INTEGER = 2**63-1
+
+
+def _integer(value: object, minimum: int, maximum: int, name: str) -> None:
+    if type(value) is not int or not minimum <= value <= maximum:
+        raise ValueError(f'{name} must be an integer in {minimum}..{maximum}')
 
 
 class RecoveryLimitError(ValueError):
@@ -22,11 +30,33 @@ class RecoveryLimitError(ValueError):
 def artifact_path(identifier: str) -> Path:
     if not isinstance(identifier, str) or not ID_RE.fullmatch(identifier):
         raise ValueError('Artifact ID must be exactly 64 lowercase SHA256 hex characters')
-    folder = root_dir() / 'artifacts'
-    path = folder / (identifier + '.txt')
-    if folder.is_symlink() or path.is_symlink() or path.resolve().parent != folder.resolve():
+    folder = canonical_path(root_dir() / 'artifacts')
+    path = canonical_path(folder / (identifier + '.txt'))
+    if path.parent != folder:
         raise ValueError('Artifact links or escaped paths are forbidden')
     return path
+
+
+def _verify_existing(identifier: str) -> None:
+    # Removing the publisher's temporary hardlink changes POSIX ctime without
+    # changing content. Retry a bounded number of complete checks after metadata
+    # drift; every successful return still requires stable state AND full SHA256.
+    for _ in range(3):
+        path = artifact_path(identifier)
+        expected = path.stat()
+        with path.open('rb') as stream:
+            opened = os.fstat(stream.fileno())
+            if not _same_file_state(expected, opened):
+                continue
+            digest = hashlib.sha256()
+            for chunk in iter(lambda: stream.read(65536), b''):
+                digest.update(chunk)
+            if digest.hexdigest() != identifier:
+                raise IntegrityError('Existing artifact integrity mismatch')
+            if (_fingerprint(os.fstat(stream.fileno())) == _fingerprint(opened)
+                    and _fingerprint(path.stat()) == _fingerprint(expected)):
+                return
+    raise IntegrityError('Artifact kept changing during existing-content check')
 
 
 def save_original(text: str) -> str:
@@ -35,8 +65,7 @@ def save_original(text: str) -> str:
     path = artifact_path(identifier)
     path.parent.mkdir(parents=True, exist_ok=True)
     if path.exists():
-        if hashlib.sha256(path.read_bytes()).hexdigest() != identifier:
-            raise ValueError('Existing artifact integrity mismatch')
+        _verify_existing(identifier)
         return identifier
     fd, temp = tempfile.mkstemp(dir=path.parent, prefix='.tg-')
     try:
@@ -44,7 +73,14 @@ def save_original(text: str) -> str:
             stream.write(data)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temp, path)
+        try:
+            # Publish a fully flushed inode without replacing an existing one.
+            # Same-content writers may race, but never invalidate each other's
+            # open read handles. Unsupported filesystems fail closed; the hook
+            # retains original output rather than using a partial artifact.
+            os.link(temp, path)
+        except FileExistsError:
+            _verify_existing(identifier)
     finally:
         if os.path.exists(temp):
             os.unlink(temp)
@@ -137,10 +173,13 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
              max_chars: int = MAX_CHARS, compression_id: str | None = None,
              session_id: str | None = None, experiment_id: str | None = None, end: int | None = None,
              char_offset: int = 0) -> str:
-    if not 1 <= max_chars <= MAX_CHARS:
-        raise ValueError(f'max_chars must be 1..{MAX_CHARS}')
-    if start < 1 or char_offset < 0 or (end is not None and end < start):
-        raise ValueError('start >= 1; char_offset >= 0; end >= start required')
+    _integer(max_chars, 1, MAX_CHARS, 'max_chars')
+    _integer(start, 1, MAX_INTEGER, 'start')
+    _integer(char_offset, 0, MAX_INTEGER, 'char_offset')
+    if end is not None:
+        _integer(end, start, MAX_INTEGER, 'end')
+    if mode == 'show' and start+count-1 > MAX_INTEGER:
+        raise ValueError('Requested end line exceeds supported integer range')
     started = time.perf_counter()
     path = artifact_path(identifier)
     owner = recovery_owner(identifier, compression_id, session_id, experiment_id)
@@ -273,6 +312,13 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
         if (_fingerprint(os.fstat(stream.fileno())) != _fingerprint(opened_source) or
                 _fingerprint(path.stat()) != _fingerprint(expected_source)):
             raise ValueError('Artifact changed during recovery read')
+        # TextIOWrapper.tell() is an opaque newline-decoder cookie. The binary
+        # buffer's position includes any read-ahead, so verify every fetched
+        # byte, not merely the characters selected for output.
+        integrity = verify_range(identifier, path, position.offset, stream.buffer.tell())
+        if (_fingerprint(os.fstat(stream.fileno())) != _fingerprint(opened_source) or
+                _fingerprint(path.stat()) != _fingerprint(expected_source)):
+            raise IntegrityError('Artifact changed during recovery verification')
     result = ''.join(piece.text for piece in pieces)
     if not result:
         result = '(scan limit reached; narrow line range)\n' if truncated else '(no matches)\n'
@@ -285,6 +331,7 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                                      'enable or repair the artifact index')
     result = result[:max_chars]
     append({'event': 'recovery', 'artifact_id': identifier, 'mode': mode,
+            **integrity,
             'compression_id': owner.get('compression_id'), 'session_id': owner.get('session_id'),
             'experiment_id': owner.get('experiment_id'), 'returned_chars': len(result),
             'scanned_chars': scanned, 'truncated': truncated, 'attribution': 'matched' if owner else 'unattributed',
@@ -297,14 +344,15 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
 
 
 def read_lines(identifier: str, start: int, count: int, max_count: int = 100, **kwargs) -> str:
-    if start < 1 or not 1 <= count <= min(100, max_count):
-        raise ValueError('start >= 1 and count 1..100 required')
+    _integer(start, 1, MAX_INTEGER, 'start')
+    _integer(max_count, 1, MAX_INTEGER, 'max_count')
+    _integer(count, 1, min(100, max_count), 'count')
     return _recover(identifier, 'show', start=start, count=count, **kwargs)
 
 
 def grep_lines(identifier: str, pattern: str, context: int = 1, limit: int = 20, **kwargs) -> str:
     if not isinstance(pattern, str) or not 1 <= len(pattern) <= 200:
         raise ValueError('pattern must have 1..200 characters')
-    if not 0 <= context <= 5 or not 1 <= limit <= 50:
-        raise ValueError('context 0..5; limit 1..50')
+    _integer(context, 0, 5, 'context')
+    _integer(limit, 1, 50, 'limit')
     return _recover(identifier, 'grep', pattern=pattern, context=context, limit=limit, **kwargs)

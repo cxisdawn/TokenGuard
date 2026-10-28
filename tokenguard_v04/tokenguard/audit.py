@@ -215,10 +215,13 @@ def summary(session_id: str | None = None, experiment_id: str | None = None,
     integrity = not (malformed or index.invalid_rows or index.duplicate_rows or index.conflicting_rows)
     measurement_coverage = {key: {'observed_records': sum(key in row for row in recovery),
                                  'total_records': len(recovery)}
-                            for key in ('scanned_chars', 'index_build_bytes', 'recovery_latency_ms', 'index_status')}
+                            for key in ('scanned_chars', 'index_build_bytes', 'recovery_latency_ms', 'index_status',
+                                        'integrity_status', 'integrity_build_bytes', 'integrity_checked_bytes')}
     def measured_sum(key: str) -> int | float | None:
         return sum(row[key] for row in recovery) if all(key in row for row in recovery) else None
     return {'index_build_bytes': measured_sum('index_build_bytes'),
+            'integrity_build_bytes': measured_sum('integrity_build_bytes'),
+            'integrity_checked_bytes': measured_sum('integrity_checked_bytes'),
             'indexed_recoveries': (sum(r['index_status'] in ('built', 'reused') for r in recovery)
                                    if all('index_status' in r for r in recovery) else None),
             'recovery_latency_ms': measured_sum('recovery_latency_ms'),

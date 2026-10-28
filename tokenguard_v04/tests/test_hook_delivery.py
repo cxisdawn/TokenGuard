@@ -178,3 +178,14 @@ def test_output_fault_receipts_and_secondary_sink_failure(isolated, failure, dev
     assert 'private' not in errors.getvalue()
     # Bytes already accepted cannot be withdrawn, even though delivery failed.
     assert len(stream.written) == 20 if failure != 'flush' else len(stream.written) > 20
+
+
+def test_unsupported_artifact_filesystem_leaves_hook_response_untouched(isolated):
+    import copy
+    event = payload()
+    before = copy.deepcopy(event)
+    with patch('tokenguard.storage.os.link', side_effect=OSError('unsupported filesystem')):
+        assert hook.handle(event) is None
+    assert event == before
+    assert events()[0] == []
+    assert list((isolated/'artifacts').iterdir()) == []

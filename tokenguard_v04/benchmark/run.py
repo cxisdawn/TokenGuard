@@ -119,6 +119,7 @@ def worker(config: dict) -> dict:
             'audit_complete':audit_complete, 'observed_audit':{k:v for k,v in report.items() if k != 'records'},
             'failure_recovery_verified':failure_recovery_verified,
             'indexed_recoveries':measured('indexed_recoveries'), 'index_build_bytes':measured('index_build_bytes'),
+            'integrity_build_bytes':measured('integrity_build_bytes'), 'integrity_checked_bytes':measured('integrity_checked_bytes'),
             'recovery_scanned_chars':measured('scanned_chars'), 'recovery_latency_ms':measured('recovery_latency_ms'),
             'initial_snapshot_sha256':initial, 'final_code_sha256':digest(project),
             'tool_calls':tools, 'original_tool_chars':sum(map(len,inputs)), 'visible_tool_chars':sum(map(len,outputs)),

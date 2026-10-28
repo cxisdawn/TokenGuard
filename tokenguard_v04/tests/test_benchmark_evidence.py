@@ -207,3 +207,29 @@ def test_large_recovery_cannot_qualify_with_explicit_failed_recovery(tmp_path):
     result = export(tmp_path, 'mock', 'fixture', rows, ('large_artifact_recovery',), 1)
     assert result['aggregate'][0]['eligible_pairs'] == 0
     assert result['aggregate'][0]['mean_character_reduction_after_recovery'] is None
+
+
+@pytest.mark.parametrize('field', ['integrity_build_bytes', 'integrity_checked_bytes'])
+def test_mock_rejects_integrity_io_that_disagrees_with_audit(tmp_path, field):
+    result, calls = stub_runner(tmp_path, lambda row: row.update({field: 999}))
+    assert len(calls) == 1
+    assert result['rows'][0]['status'] == 'infrastructure_failed'
+    assert result['aggregate'][0]['eligible_pairs'] == 0
+
+
+def test_mock_markdown_exposes_integrity_io_and_legacy_unknown(tmp_path):
+    from tokenguard.mock_reporting import export, unrun
+    rows = []
+    for arm in ('baseline', 'optimized'):
+        row = unrun({'case': 'fixture', 'variant': arm, 'round': 1})
+        row.update(status='completed', success=True, failure_details_preserved=True,
+                   initial_snapshot_sha256='a'*64, final_code_sha256='a'*64,
+                   visible_tool_chars=100, index_build_bytes=50, recovery_scanned_chars=25)
+        if arm == 'optimized':
+            row.update(integrity_build_bytes=123456, integrity_checked_bytes=654321)
+        rows.append(row)
+    export(tmp_path, 'mock', 'fixture', rows, ('fixture',), 1)
+    markdown = (tmp_path/'report.md').read_text(encoding='utf-8')
+    assert 'Full integrity bytes' in markdown
+    assert '123456' in markdown and '654321' in markdown
+    assert 'unavailable' in markdown

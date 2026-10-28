@@ -13,6 +13,7 @@ import struct
 import tempfile
 
 from .audit import root_dir
+from .visible_tests import canonical_path
 
 MAGIC = b'TGIDX002'
 HEADER = struct.Struct('<8s6Q')
@@ -51,9 +52,9 @@ def index_path(identifier: str) -> Path:
     # Keep the same identifier validation as the source artifact, without circular imports.
     if not isinstance(identifier, str) or not re.fullmatch(r'[0-9a-f]{64}', identifier):
         raise ValueError('Invalid artifact ID')
-    folder = root_dir() / 'indexes-v04'
-    path = folder / (identifier + '.idx')
-    if folder.is_symlink() or path.is_symlink() or path.resolve().parent != folder.resolve():
+    folder = canonical_path(root_dir() / 'indexes-v04')
+    path = canonical_path(folder / (identifier + '.idx'))
+    if path.parent != folder:
         raise ValueError('Index links or escaped paths are forbidden')
     return path
 
@@ -157,8 +158,8 @@ def _positions(stream):
 
 def ensure_index(identifier: str, source: Path, target: int = 1, force: bool = False,
                  *, char_offset: int = 0) -> Position:
-    if target < 1 or char_offset < 0:
-        raise ValueError('target must be >= 1; char_offset must be >= 0')
+    if type(target) is not int or type(char_offset) is not int or not 1 <= target <= 2**63-1 or not 0 <= char_offset <= 2**63-1:
+        raise ValueError('target and char_offset must be bounded integers: target >= 1, char_offset >= 0')
     path = index_path(identifier)
     if not force:
         try:

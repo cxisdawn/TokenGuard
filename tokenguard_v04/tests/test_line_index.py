@@ -68,14 +68,17 @@ class TestLineIndex(unittest.TestCase):
         self.assertEqual(read_lines(identifier,401,1),'tail\n')
         self.assertEqual(events()[0][-1]['index_status'],'built')
         self.assertEqual(path.read_bytes(),original)
-    def test_stale_source_fingerprint_rebuilds_for_legacy_artifact(self):
+    def test_stale_source_fingerprint_cannot_bless_altered_artifact(self):
         identifier=save_original('a\n'*400+'old\n')
         path=artifact_path(identifier)
         ensure_index(identifier,path)
-        # Legacy/manual artifacts can differ from the original content-address bytes.
+        # A legacy/manual rewrite cannot retain the original content identity.
         path.write_bytes(('longer\r\n'*400+'new\r\n').encode())
-        self.assertEqual(read_lines(identifier,401,1),'new\r\n')
-        self.assertEqual(events()[0][-1]['index_status'],'built')
+        altered = path.read_bytes()
+        with self.assertRaisesRegex(ValueError, 'content-address mismatch'):
+            read_lines(identifier,401,1)
+        self.assertEqual(events()[0], [])
+        self.assertEqual(path.read_bytes(), altered)
     def test_index_write_failure_falls_back_sequential(self):
         identifier=save_original('a\nb\nc\n')
         with patch('tokenguard.storage.ensure_index',side_effect=PermissionError()):
@@ -221,7 +224,8 @@ class TestLineIndex(unittest.TestCase):
                 read_lines(identifier, 401, 1)
         self.assertEqual(events()[0], [])
         self.assertEqual(source.read_bytes(), replacement)
-        self.assertEqual(read_lines(identifier, 401, 1), 'TARGET\n')
+        with self.assertRaisesRegex(ValueError, 'content-address mismatch'):
+            read_lines(identifier, 401, 1)
 
     def test_artifact_change_during_open_handle_read_is_rejected_without_audit_success(self):
         identifier = save_original('a\n' * 400 + 'TARGET\n')

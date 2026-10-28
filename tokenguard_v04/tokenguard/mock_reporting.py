@@ -9,9 +9,9 @@ import statistics
 
 COUNTS = ('tool_calls', 'original_tool_chars', 'visible_tool_chars', 'estimated_original_tool_tokens',
           'estimated_visible_tool_tokens', 'compressions', 'recovery_count', 'recovered_chars',
-          'indexed_recoveries', 'index_build_bytes', 'recovery_scanned_chars')
+          'indexed_recoveries', 'index_build_bytes', 'recovery_scanned_chars', 'integrity_build_bytes', 'integrity_checked_bytes')
 OPTIONAL = ('compressions', 'recovery_count', 'recovered_chars', 'indexed_recoveries',
-            'index_build_bytes', 'recovery_scanned_chars')
+            'index_build_bytes', 'recovery_scanned_chars', 'integrity_build_bytes', 'integrity_checked_bytes')
 UNKNOWN_USAGE = ('total_task_tokens', 'actual_api_input_tokens', 'actual_api_output_tokens',
                  'cache_read_tokens', 'cache_write_tokens', 'cache_hit_ratio', 'actual_billed_cost', 'api_latency_ms')
 HASH = re.compile(r'[0-9a-f]{64}')
@@ -60,6 +60,7 @@ def checked_worker(raw: object, config: dict, snapshot: str, final: str) -> dict
         audit_fields = {'compressions': 'compressions', 'recovery_count': 'recovery_count',
                         'recovered_chars': 'returned_chars', 'indexed_recoveries': 'indexed_recoveries',
                         'index_build_bytes': 'index_build_bytes', 'recovery_scanned_chars': 'scanned_chars',
+                        'integrity_build_bytes': 'integrity_build_bytes', 'integrity_checked_bytes': 'integrity_checked_bytes',
                         'recovery_latency_ms': 'recovery_latency_ms'}
         for field, observed in audit_fields.items():
             actual = raw['observed_audit'].get(observed)
@@ -141,6 +142,14 @@ def export(folder: Path, experiment: str, prompt: str, rows: list[dict], cases: 
     for row in rows:
         lines.append('|'+'|'.join(str(shown(row.get(key))) for key in
                      ('case','round','variant','status','success','visible_tool_chars','recovery_count','audit_complete'))+'|')
+    lines += ['', 'Recovery I/O is separate from returned characters. Full integrity builds read the entire artifact;',
+              'block checks reread selected complete blocks. These counters exclude sidecar I/O and OS cache effects.', '',
+              '|Case|Round|Arm|Scan chars|Index build bytes|Full integrity bytes|Block-check bytes|',
+              '|---|---:|---|---:|---:|---:|---:|']
+    for row in rows:
+        lines.append('|'+'|'.join(str(shown(row.get(key))) for key in
+                     ('case','round','variant','recovery_scanned_chars','index_build_bytes',
+                      'integrity_build_bytes','integrity_checked_bytes'))+'|')
     lines += ['', 'Paired character changes include selective recovery; task/API tokens and billed costs are unavailable.', '']
     for row in aggregate:
         ratio = row['mean_character_reduction_after_recovery']

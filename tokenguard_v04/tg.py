@@ -87,8 +87,13 @@ def main() -> None:
         elif args.cmd == 'index':
             from tokenguard.storage import artifact_path
             from tokenguard.line_index import ensure_index
+            from tokenguard.artifact_integrity import verify_range
             from dataclasses import asdict
-            print(json.dumps(asdict(ensure_index(args.id, artifact_path(args.id), force=args.rebuild)), indent=2))
+            source = artifact_path(args.id)
+            # This command reads the complete source to construct an index;
+            # validate all bytes even when an integrity cache already exists.
+            integrity = verify_range(args.id, source, 0, source.stat().st_size)
+            print(json.dumps({**asdict(ensure_index(args.id, source, force=args.rebuild)), **integrity}, indent=2))
         elif args.cmd == 'usage':
             from pathlib import Path
             from tokenguard.usage import import_usage, write_bundle, load
@@ -126,6 +131,7 @@ def main() -> None:
                 print(f"Delivery: stdout succeeded: {result['confirmed_stdout_deliveries']}; failed: {result['delivery_failures']}; unknown: {result['delivery_unknown']}; host acceptance unverified")
                 print(f"Recoveries: {result['recovery_count']}; returned characters: {result['returned_chars']}; scanned characters: {_measured(result['scanned_chars'])}")
                 print(f"Indexed recoveries: {_measured(result['indexed_recoveries'])}; index construction bytes: {_measured(result['index_build_bytes'])}; recovery latency ms: {_measured(result['recovery_latency_ms'], decimals=3)}")
+                print(f"Integrity verification: full-build bytes: {_measured(result['integrity_build_bytes'])}; block-check bytes: {_measured(result['integrity_checked_bytes'])}")
                 if result['estimated_token_reduction_ratio'] is None:
                     coverage = result['token_estimate_coverage']
                     print('Uncalibrated local estimate: unavailable; '

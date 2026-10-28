@@ -69,6 +69,8 @@ doctor 只读已注册的项目 Hook，验证解释器和脚本路径，在临�
 
 ## 有界原文恢复
 
+恢复现核对内容寻址身份，首次完整 SHA256，后续重验本次涉及的块；全量读取单独计量，损坏原文拒绝返回并保留。并发发布不覆盖已有 Artifact，缓存不可写时完整核验。见 [Artifact 完整性与限制](ARTIFACT_INTEGRITY.md)。
+
 ```powershell
 $Id = 'ARTIFACT_SHA256'
 $CompressionId = 'COMPRESSION_ID'

@@ -1,0 +1,73 @@
+# Artifact 完整性与恢复开销
+
+本轮修复本地存储与恢复可靠性，未运行新的付费编码任务。字符下降、本地 Token 估算、真实任务用量及账单仍分别报告；没有新的编码能力无损结论。
+
+## 保存与并发
+
+Artifact ID 是原始 stdout 的 UTF-8 字节 SHA256，文件位于数据根的 `artifacts/<ID>.txt`。先写同目录临时文件、flush/fsync，再通过硬链接原子发布完整文件，不覆盖已有目标。
+
+并发发布者发现目标已存在时，必须完整核对 SHA256 与读取前后状态。删除临时链接可能只改变 POSIX ctime；遇到状态变化最多重验三次，每次重新完整核对内容。内容冲突立即失败，持续变化最终失败。
+
+支持硬链接的 NTFS / Linux 文件系统已验证。文件系统不支持硬链接或禁止该操作时，保存失败，Hook 不发出替换，宿主继续使用原输出。中断可能遗留临时文件；本次不自动删除历史文件。
+
+## 按范围校验
+
+1. 首次恢复、缓存缺失或损坏、源文件状态变化时，流式读取整个 Artifact，核对 SHA256 与 ID。
+2. 核验成功后，可在 `integrity-v04/<ID>.sha256` 保存 64 KiB 块哈希。单个缓存最多 16 MiB，只包含元信息与哈希。
+3. 后续恢复验证缓存布局及校验和，再重读本次扫描涉及的完整块，包含 Python 二进制预读。
+4. 缓存无法写入、不可访问或超过预算时，继续完整流式核验原文件。
+5. 源文件内容不符合 ID 时，`show` / `grep` 拒绝返回，不修改或删除源文件，不追加成功恢复记录。CLI 返回 2，stdout 为空。
+6. `tg.py index` 在建立或复用定位索引前核验整个源文件；底层定位索引 API 本身不构成内容认证。
+
+旧版本曾允许改写内容后沿用旧 Artifact ID 继续恢复，现在明确拒绝这一行为。合法旧 Artifact 首次使用时自动核验，无需搬迁或改名；历史审计不回写。
+
+## 开销计量
+
+恢复成功审计、`tg.py stats`、离线 Mock JSON/CSV/Markdown 提供：
+
+| 字段 | 含义 |
+| --- | --- |
+| `returned_chars` | 返回的字符数 |
+| `scanned_chars` | 恢复扫描的 Unicode 字符数 |
+| `index_build_bytes` | 建立定位索引读取的源字节数 |
+| `integrity_build_bytes` | 全量内容核验读取的源字节数 |
+| `integrity_checked_bytes` | 再次验证所选完整块读取的源字节数 |
+| `integrity_status` | `built`、`reused` 或 `uncached` |
+| `recovery_latency_ms` | 成功恢复耗时，包含完整性核验 |
+
+首次读取可能同时包含索引建立、全量哈希与块重读，不能把 scanned_chars 宣称为总读取量。上述字节数是应用层源文件读取计数，不是物理磁盘 I/O；不含 sidecar 读写、OS 缓存、重复保存的 SHA 检查或失败请求消耗。失败请求不生成成功恢复记录，当前也不汇总失败读取成本。字符数与字节数不可相加。
+
+旧记录缺少新字段时，汇总为 null / unavailable，并附测量覆盖数；没有恢复请求时才为 0。
+
+## 路径与信任范围
+
+Artifact、定位索引、完整性缓存及其祖先均拒绝符号链接和 Windows reparse point / junction。接受合法 8.3 别名，并规范化 Windows 偶发保留的 `\\?\` / `\\?\UNC\` 路径前缀。
+
+这是损坏检测机制，不是对同一 OS 用户的认证边界。能够同时重写源文件、缓存、审计或操纵文件系统的主体不在保证范围；缓存校验和不是签名。复用时只重新核验本次涉及的块；未选中块被改写且元信息也被伪装时，不保证每次立即发现。路径检查不能完全消除同用户在检查后替换目录的竞态。
+
+所有数据保留本地。本轮测试只使用临时数据根，不扫描用户历史 Artifact。
+
+## Windows PowerShell 复现
+
+在源码仓库根目录执行，使用已有虚拟环境：
+
+```powershell
+$Python = (Resolve-Path .\.venv\Scripts\python.exe).Path
+Push-Location .\tokenguard_v04
+& $Python -X utf8 -m pytest tests/test_storage_integrity.py tests/test_artifact_integrity.py tests/test_recovery_measurements.py -q
+& $Python -X utf8 .\verify_hook.py
+& $Python -X utf8 .\benchmark\run.py --rounds 3
+Pop-Location
+```
+
+完整回归：在 tokenguard_v04 运行 `python -X utf8 -m pytest -q`。测试包含稳定改写、缓存损坏/不可写、读中变化、整数参数、真实线程/进程并发及 Windows junction / 8.3 路径。Mock 和手动 Hook 不代表真实 Claude 消费或模型编码能力验证。
+
+## 更新项目接入
+
+```powershell
+$Project = 'D:\tokenguard-benchmark'
+.\tokenguard_v04\install.ps1 -Project $Project -Python $Python
+& $Python -X utf8 .\tokenguard_v04\tg.py doctor --project $Project
+```
+
+安装只更新目标项目本地配置。在正在运行的 Claude Code 输入 `/exit`，回到 PowerShell 后 `cd $Project`，运行 `claude` 启动新会话，再输入 `/hooks` 检查 TokenGuard PostToolUse 条目。doctor 是本地模拟，不能证明新会话已消费替换。本轮未修改现有接入配置。

@@ -1,5 +1,14 @@
 # Changelog
 
+## 2026-10-28 — Artifact 完整性与并发保存
+
+- 修复稳定改写的 Artifact 仍可能被当作原文恢复的问题；首次流式 SHA256，后续按 64 KiB 块核验，损坏内容拒绝返回并保留。
+- 缓存不可写或超预算时完整核验；全量构建与块重读分别计量，旧审计未知测量保持 unavailable。
+- 以不覆盖目标的原子硬链接发布替换覆盖写入；竞争者完整核验已发布内容，元信息漂移限次重验。
+- 拒绝 Artifact / 定位索引的 Windows junction 和链接祖先，保留 8.3 兼容并规范化扩展路径前缀。
+- 恢复、索引及审计严格验证计量与游标；CLI / Mock 报告显示完整性读取开销。
+- 未新增模型调用、能力或费用节省结论。见 [完整性与复现](tokenguard_v04/ARTIFACT_INTEGRITY.md)。
+
 ## v0.4
 
 - Canonicalize snapshot comparison roots after checking real links/reparse attributes; preserve valid Windows 8.3 aliases and reject linked roots.

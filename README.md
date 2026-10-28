@@ -58,7 +58,7 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-2026-10-27 本地当前版本回归为 **528 passed、1 skipped、406 subtests passed**，相对上一阶段新增 108 项报告、计量、失败保留和路径测试；跳过项为 Windows 符号链接权限不可用。真实 Windows 8.3 短路径回归通过。三轮固定日志 Mock 30/30、两种基线任务 4/4 通过，历史十个真实会话的文件及原成绩保持不变。本轮未调用模型。先前的 108 项实际 pytest 输出契约、21 项导航检查、13 个本地例子及历史 v0.1/v0.2/v0.3 的 4/6/14 项测试结果保留。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端状态以 Actions 为准，详见 [验证范围](docs/VALIDATION.md)。
+2026-10-28 本地当前版本回归 **704 passed、1 skipped、406 subtests passed**；新增 Artifact 内容身份校验、并发发布与读取成本审计。Windows 线程/进程回归及 Linux 20 组并发压力验证通过。108 项实际 pytest 输出契约、13 个本地例子、三轮 Mock 30/30 及历史 v0.1/v0.2/v0.3 的 4/6/14 项测试通过。首次恢复完整核验的读取开销明确列出，旧测量缺失保持 unavailable。本轮未调用模型；软件测试不能证明编码能力无损或真实费用节省。详细范围及失败复现见 [验证记录](docs/VALIDATION.md)。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端状态以 Actions 为准。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
@@ -79,6 +79,8 @@ $Project = 'C:\work\my-project'
 `benchmark/quality_compare.py` 可只读汇总多个已有实验，按固定条件分组，保留所有配对及证据不足原因；原生／受控模式和不同预算不混算。仅输出描述性计数与有覆盖标记的测量，不宣称统计无损或真实费用节省。
 
 ## 文档
+
+- [Artifact 完整性、并发保存与恢复读取开销](tokenguard_v04/ARTIFACT_INTEGRITY.md)
 
 - [v0.4 接入与恢复说明](tokenguard_v04/README.md)
 - [审计完整性、Hook 输出与故障复现](tokenguard_v04/AUDIT_RELIABILITY.md)
