@@ -186,9 +186,10 @@ def _bounded_result(pieces: list[_Piece], maximum: int,
         retained = max(0, maximum-reserved)
         offset = 0
         for piece in pieces:
-            # A continuation marker must not displace half a keyword. Defer
-            # that whole record so a subsequent grep can still find its match.
-            if piece.required_chars and 0 < retained-offset < piece.required_chars:
+            # Never emit an orphaned line-label fragment or half a keyword.
+            # Defer the record so its next page can show complete metadata.
+            minimum = max(piece.required_chars, len(piece.prefix) + 1 if piece.prefix else 0)
+            if minimum and 0 < retained-offset < minimum:
                 retained = offset
                 break
             offset += len(piece.text)

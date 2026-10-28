@@ -102,6 +102,8 @@ Artifact、定位索引、完整性缓存及其祖先均拒绝符号链接和 Wi
 
 ## Windows PowerShell 复现
 
+独立评测 `python -X utf8 benchmark/recovery_contracts.py` 提供固定边界、show 重建和跨扫描分页共 67 项检查，分列实际 CLI/API 及生产/压力参数。报告绑定实现、验证器和样例 Hash；缺失证据保留失败分母。历史版本负对照与小预算行号标签修复见 [原文恢复评测](RECOVERY_CONTRACTS.md)。
+
 在源码仓库根目录执行，使用已有虚拟环境：
 
 ```powershell
