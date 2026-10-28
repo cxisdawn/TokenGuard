@@ -53,12 +53,30 @@ def test_missing_cache_cannot_bless_legacy_content_address_mismatch(artifact):
     assert not integrity.integrity_path(identifier).exists()
 
 
-def test_same_fingerprint_still_checks_selected_block(artifact, monkeypatch):
+@pytest.mark.parametrize('path_ctime_delta', [0, 100_000])
+def test_same_fingerprint_still_checks_selected_block(artifact, monkeypatch, path_ctime_delta):
+    from types import SimpleNamespace
+
     identifier, source = artifact(b'a' * integrity.BLOCK_SIZE + b'b' * 12)
+    original_stat = Path.stat
+
+    def path_ctime(path, *args, **kwargs):
+        current = original_stat(path, *args, **kwargs)
+        if path != source:
+            return current
+        fields = {name: getattr(current, name) for name in dir(current) if name.startswith('st_')}
+        fields['st_ctime_ns'] += path_ctime_delta
+        return SimpleNamespace(**fields)
+
+    monkeypatch.setattr(Path, 'stat', path_ctime)
     integrity.verify_range(identifier, source, 0, 1)
     # Explicitly model hidden/restored metadata, including ctime; the selected
     # block check must not rely on the stale-cache metadata branch.
-    fingerprint = integrity._fingerprint(source.stat())
+    # The cache binds handle metadata. Windows stat/fstat may expose different
+    # ctime values; freezing path metadata would accidentally force a rebuild
+    # instead of exercising the cached block verification promised by this test.
+    with source.open('rb') as stream:
+        fingerprint = integrity._fingerprint(os.fstat(stream.fileno()))
     source.write_bytes(b'z' + b'a' * (integrity.BLOCK_SIZE - 1) + b'b' * 12)
     monkeypatch.setattr(integrity, '_fingerprint', lambda stat: fingerprint)
     with pytest.raises(integrity.IntegrityError, match='block'):
