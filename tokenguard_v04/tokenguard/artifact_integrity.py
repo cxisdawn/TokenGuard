@@ -17,7 +17,7 @@ import tempfile
 from typing import BinaryIO
 
 from .audit import root_dir
-from .visible_tests import canonical_path
+from .visible_tests import canonical_path, filesystem_path
 
 BLOCK_SIZE = 64 * 1024
 MAX_SIDECAR_BYTES = 16 * 1024 * 1024
@@ -63,7 +63,7 @@ def integrity_path(identifier: str) -> Path:
     """Return a validated cache location; reject linked ancestors, even at root."""
     _identifier(identifier)
     folder = _canonical(root_dir()) / 'integrity-v04'
-    return _canonical(folder / (identifier + '.sha256'))
+    return filesystem_path(_canonical(folder / (identifier + '.sha256')))
 
 
 def _source_path(identifier: str, source: Path) -> Path:
@@ -71,7 +71,7 @@ def _source_path(identifier: str, source: Path) -> Path:
     source = _canonical(source)
     if source != expected:
         raise IntegrityError('Source path does not match the content-addressed artifact')
-    return source
+    return filesystem_path(source)
 
 
 def _stable(source: Path, stream: BinaryIO, opened: os.stat_result,

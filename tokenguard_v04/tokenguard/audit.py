@@ -11,13 +11,14 @@ from typing import Any, Iterator
 import uuid
 
 from .audit_schema import AuditIndex, count, identifier, validated
+from .visible_tests import filesystem_path
 
 MAX_LINE_BYTES = 256 * 1024
 LOCK_TIMEOUT_SECONDS = 2.0
 
 
 def root_dir() -> Path:
-    return Path(os.environ.get('TOKENGUARD_DATA_DIR', str(Path.home() / '.tokenguard')))
+    return filesystem_path(Path(os.environ.get('TOKENGUARD_DATA_DIR', str(Path.home() / '.tokenguard'))))
 
 
 def timestamp() -> str:
@@ -27,7 +28,7 @@ def timestamp() -> str:
 @contextmanager
 def _append_lock(path: Path) -> Iterator[None]:
     """Serialize TokenGuard writers with a bounded OS lock, released on process exit."""
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_BINARY', 0), 0o600)
+    fd = os.open(filesystem_path(path), os.O_RDWR | os.O_CREAT | getattr(os, 'O_BINARY', 0), 0o600)
     locked = False
     try:
         deadline = time.monotonic() + LOCK_TIMEOUT_SECONDS
@@ -96,7 +97,7 @@ def append(row: dict[str, Any], filename: str = 'audit-v04.jsonl') -> None:
                           ensure_ascii=True, allow_nan=False) + '\n').encode('utf-8')
     if len(encoded) > MAX_LINE_BYTES:
         raise ValueError('audit record exceeds the bounded reader limit')
-    path = folder / filename
+    path = filesystem_path(folder / filename)
     with _append_lock(path.with_name(path.name + '.lock')):
         fd = os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, 'O_BINARY', 0), 0o600)
         try:
@@ -114,6 +115,7 @@ def append(row: dict[str, Any], filename: str = 'audit-v04.jsonl') -> None:
 
 def _rows(path: Path) -> Iterator[dict | None]:
     """Bound each read; a bad UTF-8/JSON/oversized physical line yields one None."""
+    path = filesystem_path(path)
     if not path.exists():
         return
     with path.open('rb') as stream:

@@ -13,7 +13,7 @@ import struct
 import tempfile
 
 from .audit import root_dir
-from .visible_tests import canonical_path
+from .visible_tests import canonical_path, filesystem_path
 
 MAGIC = b'TGIDX002'
 HEADER = struct.Struct('<8s6Q')
@@ -56,7 +56,7 @@ def index_path(identifier: str) -> Path:
     path = canonical_path(folder / (identifier + '.idx'))
     if path.parent != folder:
         raise ValueError('Index links or escaped paths are forbidden')
-    return path
+    return filesystem_path(path)
 
 
 def _read(path: Path, source: Path, target: int, column: int = 0) -> Position:
@@ -160,6 +160,7 @@ def ensure_index(identifier: str, source: Path, target: int = 1, force: bool = F
                  *, char_offset: int = 0) -> Position:
     if type(target) is not int or type(char_offset) is not int or not 1 <= target <= 2**63-1 or not 0 <= char_offset <= 2**63-1:
         raise ValueError('target and char_offset must be bounded integers: target >= 1, char_offset >= 0')
+    source = filesystem_path(source)
     path = index_path(identifier)
     if not force:
         try:

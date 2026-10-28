@@ -8,7 +8,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
-from pathlib import Path, PurePosixPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 import subprocess
 import sys
 import tempfile
@@ -21,21 +21,63 @@ DEFAULT_TESTS = ['tests/lint/unittest_lint.py', 'tests/test_self.py']
 LIMIT = 16 * 1024 * 1024
 
 
+def _windows_io_name(value: str) -> str:
+    """Spell an absolute drive/UNC path for Win32 I/O, without resolving links."""
+    value = value.replace('/', '\\')
+    if value.startswith('\\\\.\\'):
+        raise ValueError('Device namespaces are forbidden')
+    if value[:8].casefold() == '\\\\?\\unc\\':
+        value = '\\\\' + value[8:]
+    elif value.startswith('\\\\?\\'):
+        value = value[4:]
+    path = PureWindowsPath(value)
+    if not path.is_absolute() or '..' in path.parts:
+        raise ValueError('An absolute path without parent traversal is required')
+    drive = path.drive
+    if len(drive) == 2 and drive[0] in 'abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ' and drive[1] == ':':
+        return '\\\\?\\' + str(path)
+    if drive.startswith('\\\\'):
+        parts = drive[2:].split('\\')
+        if len(parts) == 2 and all(part and part not in ('.', '..') and not any(c in part for c in ':?*') for part in parts):
+            return '\\\\?\\UNC\\' + str(path)[2:]
+    raise ValueError('Only drive and UNC filesystem paths are supported')
+
+
+def filesystem_path(path: Path) -> Path:
+    """Keep path identity separate from Windows extended-length I/O spelling.
+
+    Prefix before the legacy directory limit, measured in UTF-16 code units.
+    This is not path validation: callers still check links/reparse points and
+    artifact ownership. Kept here so copied visible-test workers stay standalone.
+    """
+    if os.name != 'nt':
+        return path
+    if '..' in path.parts:
+        raise ValueError('Parent path traversal is forbidden')
+    absolute = path.absolute()
+    name = str(absolute)
+    extended = _windows_io_name(name)
+    return Path(extended) if len(name.encode('utf-16-le', 'surrogatepass')) // 2 >= 248 else path
+
+
 def canonical_path(path: Path) -> Path:
     """Reject actual links/reparse points, while accepting Windows 8.3 aliases."""
+    if '..' in path.parts:
+        raise ValueError('Parent path traversal is forbidden')
     path = path.absolute()
     if '..' in path.parts:
         raise ValueError('Parent path traversal is forbidden')
     for component in (path, *path.parents):
-        if component.is_symlink():
+        inspected = filesystem_path(component)
+        if inspected.is_symlink():
             raise ValueError('Path links are forbidden')
         try:
-            attributes = getattr(component.lstat(), 'st_file_attributes', 0)
+            attributes = getattr(inspected.lstat(), 'st_file_attributes', 0)
         except FileNotFoundError:
             continue
         if attributes & 0x400:  # FILE_ATTRIBUTE_REPARSE_POINT, including junctions
             raise ValueError('Path links or reparse points are forbidden')
-    resolved = path.resolve()
+    resolved = filesystem_path(path).resolve()
     # Windows may retain the extended-length prefix during a sharing race.
     # Normalize its spelling so equal paths still compare equal; all reparse
     # checks above happen before resolution and are never skipped.

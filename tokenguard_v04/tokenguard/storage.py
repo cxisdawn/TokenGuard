@@ -10,7 +10,7 @@ from pathlib import Path
 from .audit import append, recovery_owner, root_dir
 from .line_index import ensure_index, Position, _fingerprint, _same_file_state
 from .artifact_integrity import verify_range, IntegrityError
-from .visible_tests import canonical_path
+from .visible_tests import canonical_path, filesystem_path
 
 ID_RE = re.compile(r'^[0-9a-f]{64}$')
 MAX_CHARS = 12000
@@ -34,7 +34,7 @@ def artifact_path(identifier: str) -> Path:
     path = canonical_path(folder / (identifier + '.txt'))
     if path.parent != folder:
         raise ValueError('Artifact links or escaped paths are forbidden')
-    return path
+    return filesystem_path(path)
 
 
 def _verify_existing(identifier: str) -> None:
