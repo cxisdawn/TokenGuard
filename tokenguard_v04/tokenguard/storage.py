@@ -94,6 +94,9 @@ class _Piece:
     prefix: str
     body: str
     required_chars: int = 0
+    match_start: int | None = None
+    notice: str = ''
+    windowed: bool = False
 
     @property
     def text(self) -> str:
@@ -132,6 +135,25 @@ def _match_span(value: str, pattern: str) -> tuple[int, int] | None:
 def _limit_marker(line: int, column: int) -> str:
     return (f'\n[TokenGuard: retrieval limit reached; next_start_line={line}; '
             f'next_start_char={column}]\n')
+
+
+def _window_piece(piece: _Piece, maximum: int, fallback: tuple[int, int]) -> _Piece:
+    """Fit an already selected match after continuation becomes necessary."""
+    if piece.match_start is None:
+        return piece
+    reserved = max(len(_limit_marker(*fallback)),
+                   len(_limit_marker(piece.line, piece.column + len(piece.body))))
+    if piece.required_chars <= maximum - reserved:
+        return piece
+    match_end = piece.required_chars - len(piece.prefix)
+    prefix_budget = len(piece.notice + f'{piece.line}: [char {piece.column + len(piece.body)}] ')
+    width = max(1, maximum - reserved - prefix_budget)
+    begin = max(0, piece.match_start - max(0, width - (match_end - piece.match_start)) // 2)
+    begin = min(begin, max(0, len(piece.body) - width))
+    prefix = piece.notice + f'{piece.line}: [char {piece.column + begin}] '
+    return _Piece(piece.line, piece.column + begin, prefix, piece.body[begin:],
+                  len(prefix) + match_end - begin, piece.match_start - begin,
+                  piece.notice, True)
 
 
 def _bounded_result(pieces: list[_Piece], maximum: int,
@@ -269,6 +291,8 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                 prefix = notice + f'{n}: ' if mode == 'grep' else ''
                 remaining = max_chars-emitted
                 match_end_in_value = span[1] if span is not None else 0
+                begin = 0
+                windowed = False
                 if mode == 'grep' and span is not None and len(prefix)+len(value) > remaining:
                     # Surface the matching text, even when it follows megabytes
                     # of a single-line JSON record. Offsets are Unicode chars.
@@ -283,11 +307,14 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                     prefix = notice + f'{n}: [char {col}] '
                     match_end_in_value -= begin
                     windowed_matches += 1
+                    windowed = True
                 used = (prefix+value)[:remaining]
                 used_prefix = used[:min(len(prefix), len(used))]
                 body = used[len(used_prefix):]
                 required_chars = len(prefix)+match_end_in_value if span is not None else 0
-                pieces.append(_Piece(n, col, used_prefix, body, required_chars))
+                pieces.append(_Piece(n, col, used_prefix, body, required_chars,
+                                     span[0] - begin if span is not None else None,
+                                     notice, windowed))
                 emitted += len(used)
                 last_emitted = n
                 if emitted == max_chars:
@@ -317,7 +344,13 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                 truncated = bool(lookahead)
                 break
         else:
-            truncated = True
+            # Exhausting the scan budget does not establish that content
+            # remains. An exact EOF needs no continuation, even when no match
+            # was emitted. Measure the one-character probe just as for output
+            # and match limits; integrity verification below covers read-ahead.
+            lookahead = stream.read(1)
+            scanned += len(lookahead)
+            truncated = bool(lookahead)
         if (_fingerprint(os.fstat(stream.fileno())) != _fingerprint(opened_source) or
                 _fingerprint(path.stat()) != _fingerprint(expected_source)):
             raise ValueError('Artifact changed during recovery read')
@@ -334,6 +367,11 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
     # Hard cap includes the marker. Bounded output is auditable even for huge single lines.
     resume_line = resume_char = None
     if truncated:
+        if pieces:
+            first = pieces[0]
+            pieces[0] = _window_piece(first, max_chars, resume)
+            if pieces[0].windowed and not first.windowed:
+                windowed_matches += 1
         result, (resume_line, resume_char) = _bounded_result(pieces, max_chars, resume)
         if (resume_line, resume_char) <= (start, char_offset):
             raise RecoveryLimitError('scan limit prevents reaching or advancing the requested cursor; '

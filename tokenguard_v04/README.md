@@ -6,6 +6,8 @@ pytest 提供 [compact / indexed / off 三种模式](PYTEST_NAVIGATION.md)：默
 
 当前版本说明；项目概览和环境创建步骤见[根 README](../README.md)。
 
+原文恢复新增 [扫描完成状态与命中窗口验证](ARTIFACT_INTEGRITY.md#扫描上限与命中窗口)：扫描量恰好达到上限时检查实际 EOF，匹配行与续读元数据争用预算时保留完整关键词窗口。69 项针对性测试包含默认 8 MiB 的实际 CLI 和连续分页独立核对；无需修改已安装的 Hook 配置。
+
 任务级 A/B 执行器已加入：参见 [TASK_EXPERIMENTS.md](TASK_EXPERIMENTS.md)。默认只预览计划；可通过本地 Fixture 子进程验证修复、压缩和独立测试验收，不调用付费模型。另已明确授权完成首轮真实 Claude 任务，两组均通过独立测试，但优化组输出不足阈值，未发生压缩，不能当作压缩收益验证。
 
 支持 `prepare --baseline-mode no_hook` 与默认 `disabled_hook` 两种基线。运行 `python benchmark/baseline_demo.py --rounds 3` 可完成两种基线的本地对照，记录 Hook 进程开销并分别输出报告，不调用模型。
