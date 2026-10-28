@@ -2,6 +2,28 @@
 
 本轮从发布版本 `f97f48c` 继续开发，保留旧版本和历史实验。新增验证不调用模型；没有把本地测试通过解释为真实编码能力无损。最近一次受控日志真实实验仍是基线完成修复、优化组未完成并引入回归，见 [原始结论](QUALITY_PILOT_RESULTS.md)。
 
+## 完整诊断记录与 pip 进度保护
+
+2026-10-28，从 `87bf905` 继续审查两种文本识别边界。新增物理记录测试最初 **47 失败、8 通过**；pip 测试最初 **38 失败、15 通过**，其中包括新增 Windows/占位格式尚不支持的情形。最终两类 **118 项定向测试通过**。
+
+原重复日志策略使用 `str.splitlines()`，它把 NEL、Unicode 行/段分隔符、VT、FF 和文件/组/记录分隔符也当作换行。包含重复片段的一条诊断因此可能被拆开隐藏；严重关键词只保护拆开的最后一段。固定的合法 JSON 日志对照中，旧版将 5640 字符改为 131 字符且 JSON 解析失败，修复后该条保持 5640 字符并与原对象相等。压缩率在这里下降是保留语义的必要结果。
+
+重复折叠现与 Artifact 恢复一致，按 CR/LF/CRLF 识别物理记录。40 组固定种子混合换行样例在压缩后，按摘要中的次数独立展开，可逐字符还原；严重记录即使重复也完整保留。覆盖无末尾换行、嵌入控制字符及真实重复记录仍可折叠。文件搜索原有保守拒绝逻辑通过八种行内分隔符反例，无需变更。
+
+原 pip 正则只要求条形前缀及速度文本，导致同一行的 `ERROR: checksum mismatch`、警告或未知诊断也被聚合。现只接受完整的已知字段组合，不匹配的记录原样保留；普通进度仍可聚合。测试包含 ANSI、三种换行、无末尾换行、Windows 横线条、未知速度 `?` 和 ETA 占位值。本机 Windows 样式由已安装 pip 的 Rich renderer 消费内存字节生成，没有安装包或网络请求；其文本固定到测试中，回归不依赖 pip 内部 API。
+
+实际子进程分别模拟构建和 pip Hook：验证整个失败记录仍在替换输出中、其他响应字段不变、Artifact UTF-8 字节相等，再通过 `show --start 401 --count 1` 与 `grep --context 0` 精确恢复该记录。它们是手动 Hook 协议验证，不是实际安装 pip 包、真实 Claude 消费或模型编码能力测试。
+
+```powershell
+Set-Location 'D:\TokenGuard\development\TokenGuard\tokenguard_v04'
+$Python = 'D:\tokenguard-benchmark\.venv\Scripts\python.exe'
+& $Python -X utf8 -m pytest -q tests/test_physical_records.py tests/test_pip_safety.py
+```
+
+最终完整回归 **859 passed、1 skipped、406 subtests passed**，13 个本地例子和短报告目录的三轮 Mock 30/30 通过。深目录 Mock 在 262 字符的普通 Windows Artifact 路径处失败；186 字符路径独立对照成功，失败时 Hook 安全透传。该长路径限制尚未修复，原失败/未运行记录保留，不能只报告后一次成功。详见 [完整验证记录](../docs/VALIDATION.md)。
+
+本地 RED、GREEN、旧/新对照、完整回归及示例报告保留在被 Git 忽略的独立 `reports/physical-records-*` 目录，最终三轮 Mock 位于 `reports/diag-mock/`；不上传原始日志。没有新增付费会话或覆盖率测量，实际 API usage 和账单仍 unavailable。
+
 ## 2026-10-27 本地验收
 
 - Windows / Python 3.11：**303 passed、1 skipped、359 subtests passed**，相对 `f97f48c` 新增 82 项回归；跳过项为 Windows 符号链接权限。

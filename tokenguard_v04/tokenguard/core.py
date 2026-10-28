@@ -22,6 +22,12 @@ TRACEBACK = re.compile(r'Traceback \(most recent call last\)|ExceptionGroup Trac
 DIFF_HEADER = re.compile(r'(?m)^diff (?:--git|--cc|--combined)|^@@|^--- |^\+\+\+ |^GIT binary patch|^Binary files .* differ')
 UNIT_PASS = re.compile(r'^\S+ \([^\n]+\)(?:\s+\.\.\.)? \.\.\. ok\s*$')
 DETAIL = re.compile(r'^\s*(?:=+\s*(?:FAILURES|ERRORS|short test summary)|_{3,}|FAIL:|ERROR:)', re.I)
+PIP_PROGRESS = re.compile(
+    r'[ \t]*[━─█=\-]+[ \t]+'
+    r'[0-9]+(?:\.[0-9]+)?(?:/[0-9]+(?:\.[0-9]+)?)?[ \t]+'
+    r'(?:bytes|[kMGTPEZY]B)[ \t]+'
+    r'(?:[0-9]+(?:\.[0-9]+)?[ \t]+(?:bytes|[kMGTPEZY]B)/s|\?)'
+    r'(?:[ \t]+(?:eta[ \t]+)?(?:[0-9]+:[0-9]{2}:[0-9]{2}|-:--:--))?[ \t]*')
 
 
 def command_type(command: str) -> str:
@@ -45,7 +51,10 @@ def _rle(text: str, allow_warning: bool = False) -> str:
         if count:
             result.append(f'[TokenGuard: {count} identical adjacent non-critical lines hidden]\n')
             count = 0
-    for line in text.splitlines(keepends=True):
+    # Match artifact recovery's CR/LF records. Unicode separators and C0
+    # controls can occur inside one diagnostic/JSON record: splitting them
+    # would hide inline fragments and bypass protection on the whole record.
+    for line in io.StringIO(text, newline=''):
         protected = PROTECTED.search(line) or (WARNING.search(line) and not allow_warning)
         if line == previous and not protected:
             count += 1
@@ -162,9 +171,9 @@ def compress(text: str, min_chars: int = 3000, max_ratio: float = 0.85,
         candidate = _aggregate(text, UNIT_PASS, 'unittest ok')
         strategy = 'unittest_pass_summary'
     elif kind == 'pip':
-        # Only discard progress bars, never dependency versions, resolver or error text.
-        progress = re.compile(r'^\s*[━─█=]+.*(?:kB|MB|GB|bytes)/s.*$')
-        candidate = _aggregate(text, progress, 'pip progress')
+        # Require a whole known progress record. A bar/speed prefix alone may
+        # precede interleaved errors or unknown diagnostics on the same line.
+        candidate = _aggregate(text, PIP_PROGRESS, 'pip progress')
         strategy = 'pip_progress'
     elif kind == 'search':
         lines = text.splitlines(keepends=True)
