@@ -21,6 +21,20 @@ jobs:
         with:
           python-version: ${{ matrix.python }}
       - run: python -m pip install -r requirements-dev.txt
+      - name: Ensure ripgrep on the ephemeral CI runner
+        shell: pwsh
+        run: |
+          if (-not (Get-Command rg -ErrorAction SilentlyContinue)) {
+            if ($IsWindows) {
+              choco install ripgrep --yes --no-progress
+            } else {
+              sudo apt-get update
+              if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+              sudo apt-get install -y ripgrep
+            }
+            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          }
+          rg --version
       - name: Current version regression
         working-directory: tokenguard_v04
         run: python ../tools/run_tests.py
@@ -39,6 +53,9 @@ jobs:
       - name: Offline build and pip output contracts
         working-directory: tokenguard_v04
         run: python benchmark/build_pip_contracts.py
+      - name: Actual ripgrep output and diagnostic preservation
+        working-directory: tokenguard_v04
+        run: python benchmark/search_contracts.py
       - name: Local tool and selective recovery examples
         working-directory: tokenguard_v04
         run: python benchmark/examples.py

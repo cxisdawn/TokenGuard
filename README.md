@@ -60,9 +60,11 @@ $Project = 'C:\work\my-project'
 
 ## 当前证据边界
 
-2026-10-28 最新完整回归 **1150 passed、1 skipped、406 subtests passed**。本轮新增 25 项测试及构建/pip 的 **56/56** 离线输出检查，验证真实 Python 编译、临时目录 pip 安装、真实 renderer 和明确标注的混合日志；三个故障副本均被拒绝。94 个 Python 文件验证前后 Hash 一致，未新增模型调用；不代表 native 编译器、真实下载或编码能力测评，详见 [验证记录](docs/VALIDATION.md)。
+2026-10-28 最新完整回归 **1247 passed、1 skipped、406 subtests passed**。本轮新增 97 项回归，修复文件搜索隐藏路径形状诊断的问题。真实 rg 输出评测 **62/62**，旧版同一评测 **53/62**；逐字节相同的实际 PowerShell 输出回放证实诊断保护修复。98 个 Python 文件验证前后 Hash 一致，未新增模型调用；详见 [搜索保护](tokenguard_v04/SEARCH_SAFETY.md) 与 [验证记录](docs/VALIDATION.md)。
 
-上一阶段回归 **1125 passed、1 skipped、406 subtests passed**；该阶段新增 64 项测试，收紧 unittest 成功记录识别、保护报告尾部及文档/实时输出，并修复评测器自身的长路径读取。真实本地 unittest 评测 **74/74**，独立恢复评测 **67/67**；相同原文的六类旧/新回放验证五类内容丢失修复及一类新增保守透传。手动 Hook、实际 pytest 108 项、13 个本地例子及三轮 Mock 的详细结果与失败记录见 [验证记录](docs/VALIDATION.md)。前阶段上下文漏检、扫描 EOF、Windows 长路径和并发验证保留，原失败报告不回写。首次完整核验开销单独列出，旧测量缺失保持 unavailable。真实 UNC 共享、任意外部工具及无限长路径不在验证范围。软件测试不能证明编码能力无损或真实费用节省。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端状态以 Actions 为准。
+前一阶段完整回归 **1150 passed、1 skipped、406 subtests passed**，新增 25 项测试及构建/pip 的 **56/56** 离线输出检查，验证真实 Python 编译、临时目录 pip 安装、真实 renderer 和明确标注的混合日志；三个故障副本均被拒绝。94 个 Python 文件验证前后 Hash 一致；不代表 native 编译器、真实下载或编码能力测评。
+
+更早的 unittest 阶段回归 **1125 passed、1 skipped、406 subtests passed**；该阶段新增 64 项测试，收紧 unittest 成功记录识别、保护报告尾部及文档/实时输出，并修复评测器自身的长路径读取。真实本地 unittest 评测 **74/74**，独立恢复评测 **67/67**；相同原文的六类旧/新回放验证五类内容丢失修复及一类新增保守透传。手动 Hook、实际 pytest 108 项、13 个本地例子及三轮 Mock 的详细结果与失败记录见 [验证记录](docs/VALIDATION.md)。前阶段上下文漏检、扫描 EOF、Windows 长路径和并发验证保留，原失败报告不回写。首次完整核验开销单独列出，旧测量缺失保持 unavailable。真实 UNC 共享、任意外部工具及无限长路径不在验证范围。软件测试不能证明编码能力无损或真实费用节省。CI 覆盖 Windows/Linux 与 Python 3.10/3.12，远端状态以 Actions 为准。
 
 已有一次用户运行的真实 Claude 会话证据：模型引用了与本地审计精确匹配的替换元数据。这证明该次模型看到了替换内容，不能证明稳定触发率，也不能证明原文在所有上下文中完全不存在。
 
@@ -84,6 +86,7 @@ $Project = 'C:\work\my-project'
 
 ## 文档
 
+- [文件搜索诊断保护及真实 rg 验证](tokenguard_v04/SEARCH_SAFETY.md)
 - [构建与 pip 的离线实际输出验证](tokenguard_v04/BUILD_PIP_CONTRACTS.md)
 - [unittest 输出保护及真实本地验证](tokenguard_v04/UNITTEST_SAFETY.md)
 - [独立原文恢复评测及历史负对照](tokenguard_v04/RECOVERY_CONTRACTS.md)

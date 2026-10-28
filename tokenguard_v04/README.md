@@ -10,6 +10,8 @@ unittest 新增 [真实输出验证与保守识别](UNITTEST_SAFETY.md)：文档
 
 构建/pip 新增 [离线实际工具输出评测](BUILD_PIP_CONTRACTS.md)：执行 `python -X utf8 benchmark/build_pip_contracts.py`，验证 Python 编译、本地 wheel 安装、真实 pip renderer 和明确标注的混合诊断。全程无下载、不安装到当前环境；报告区分原生 stderr、合并流与换行变体，不代表编码质量测评。
 
+文件搜索新增 [诊断保护与实际 rg 验证](SEARCH_SAFETY.md)：只有明确的简单列举命令和可识别的文件记录才截取前 20 条；复合命令、路径形状的提示、NUL 及未知格式透传。`python -X utf8 benchmark/search_contracts.py` 用本机 ripgrep 和手动 Hook/CLI 验证，缺工具会保留失败分母，不调用模型。
+
 新增 [独立原文恢复评测](RECOVERY_CONTRACTS.md)：运行 `python -X utf8 benchmark/recovery_contracts.py`，67 项检查 show 重建、grep 命中行可达、预算、游标及审计，生成 JSON/CSV/Markdown。固定输入与历史版本负对照已验证；不启动模型、不读取用户历史 Artifact。修复小预算下部分行号标签，29 项新增测试及完整回归通过。
 
 原文恢复新增 [扫描完成状态与命中窗口验证](ARTIFACT_INTEGRITY.md#扫描上限与命中窗口)：扫描量恰好达到上限时检查实际 EOF，匹配行与续读元数据争用预算时保留完整关键词窗口。69 项针对性测试包含默认 8 MiB 的实际 CLI 和连续分页独立核对；无需修改已安装的 Hook 配置。

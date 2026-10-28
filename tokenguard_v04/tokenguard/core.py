@@ -2,6 +2,7 @@
 import io
 import re
 
+from .file_search import filename_command, search_hint, summarize as summarize_files
 from .pytest_index import PassedIndex, base_node
 from .unittest_progress import summarize as summarize_unittest
 
@@ -33,9 +34,10 @@ PIP_PROGRESS = re.compile(
 def command_type(command: str) -> str:
     if re.search(r'\bgit\s+(?:diff|show)\b', command):
         return 'git_diff'
+    if filename_command(command) or search_hint(command):
+        return 'search'
     for kind, pattern in [('pytest', r'\bpytest\b'), ('unittest', r'\bunittest\b'),
                           ('pip', r'\bpip(?:3)?\s+install\b'),
-                          ('search', r'\brg\s+--files\b|\bfind\s+.+\s-type\s+f\b'),
                           ('build', r'\b(?:build|compile|compileall|py_compile|make|cmake|ninja|msbuild|webpack)\b')]:
         if re.search(pattern, command, re.I):
             return kind
@@ -178,11 +180,9 @@ def compress(text: str, min_chars: int = 3000, max_ratio: float = 0.85,
         candidate = _aggregate(text, PIP_PROGRESS, 'pip progress')
         strategy = 'pip_progress'
     elif kind == 'search':
-        lines = text.splitlines(keepends=True)
-        # Filename-only results, with no diagnostic/unknown rows. Never truncate grep content.
-        if any(not re.fullmatch(r'[\w./\\:@+ -]+\.[\w-]+', x.rstrip('\r\n')) or PROTECTED.search(x) for x in lines):
+        candidate = summarize_files(text, command, PROTECTED)
+        if candidate is None:
             return text, 'ambiguous_search'
-        candidate = ''.join(lines[:20]) + f'[TokenGuard: {len(lines)-20} file paths hidden; use artifact grep/show]\n'
         strategy = 'file_search'
     else:
         candidate = _rle(text, allow_warning=True)
