@@ -137,11 +137,22 @@ def _limit_marker(line: int, column: int) -> str:
             f'next_start_char={column}]\n')
 
 
-def _window_piece(piece: _Piece, maximum: int, fallback: tuple[int, int]) -> _Piece:
+def _marker_reserve(pieces: list[_Piece], fallback: tuple[int, int]) -> int:
+    """Bound every selected cursor's metadata, including digit transitions."""
+    reserved = len(_limit_marker(*fallback))
+    for piece in pieces:
+        reserved = max(reserved, len(_limit_marker(piece.line, piece.column + len(piece.body))))
+        if piece.body.endswith(('\r', '\n')):
+            reserved = max(reserved, len(_limit_marker(piece.line + 1, 0)))
+    return reserved
+
+
+def _window_piece(piece: _Piece, maximum: int, fallback: tuple[int, int],
+                  reserved: int = 0) -> _Piece:
     """Fit an already selected match after continuation becomes necessary."""
     if piece.match_start is None:
         return piece
-    reserved = max(len(_limit_marker(*fallback)),
+    reserved = max(reserved, len(_limit_marker(*fallback)),
                    len(_limit_marker(piece.line, piece.column + len(piece.body))))
     if piece.required_chars <= maximum - reserved:
         return piece
@@ -170,7 +181,7 @@ def _bounded_result(pieces: list[_Piece], maximum: int,
 
     # Reserving the largest encountered marker also handles digit boundaries
     # without oscillating between e.g. column 999 and 1000.
-    reserved = len(_limit_marker(*fallback))
+    reserved = _marker_reserve(pieces, fallback)
     while True:
         retained = max(0, maximum-reserved)
         offset = 0
@@ -264,8 +275,11 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                 if number >= start:
                     selected = [(number, column, line, None)]
             else:
-                span = _match_span(line, pattern) if matches < limit else None
-                hit = span is not None
+                # Reaching the match limit stops counting hits, not protecting
+                # keywords in requested tail context. Otherwise pagination can
+                # split such a keyword and resume beyond its start forever.
+                span = _match_span(line, pattern) if matches < limit or tail else None
+                hit = span is not None and matches < limit
                 if hit:
                     matches += 1
                     selected = list(before) + [(number, column, line, span)]
@@ -281,7 +295,7 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
                         selected = [(number, column, line, span)]
                     tail = context
                 elif tail:
-                    selected = [(number, column, line, None)]
+                    selected = [(number, column, line, span)]
                     tail -= 1
                 before.append((number, column, line, None))
             for selected_index, (n, col, value, span) in enumerate(selected):
@@ -369,7 +383,7 @@ def _recover(identifier: str, mode: str, *, start: int = 1, count: int = 30,
     if truncated:
         if pieces:
             first = pieces[0]
-            pieces[0] = _window_piece(first, max_chars, resume)
+            pieces[0] = _window_piece(first, max_chars, resume, _marker_reserve(pieces, resume))
             if pieces[0].windowed and not first.windowed:
                 windowed_matches += 1
         result, (resume_line, resume_char) = _bounded_result(pieces, max_chars, resume)
