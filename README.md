@@ -9,7 +9,7 @@
 ## 功能
 
 - pytest/unittest 成功记录聚合、构建重复日志、pip 进度、重复警告及文件名搜索压缩。
-- Traceback、Git diff 和重要失败内容保护；不确定或异常时透传原始输出。
+- Traceback、Git diff 和重要失败内容保护；严重词含 ANSI CSI 配色时仍保留重复次数，不确定或异常时透传原始输出。
 - SHA256 Artifact、本地关键词/行范围/长行片段恢复、有界返回及稀疏字符定位索引。
 - pytest 可选测试名称索引；实时输出歧义、报告段和未知格式采用保守保护。
 - session/experiment 审计，分列候选字符减少、stdout 写出状态、恢复量和证据完整性。

@@ -8,7 +8,7 @@ pytest 提供 [compact / indexed / off 三种模式](PYTEST_NAVIGATION.md)：默
 
 unittest 新增 [真实输出验证与保守识别](UNITTEST_SAFETY.md)：文档说明、未完成标题和独立状态触发整段透传；只聚合明确成功记录，报告区及后文保留。`python -X utf8 benchmark/unittest_contracts.py` 可复现真实本地 unittest、手动 Hook 和原文恢复检查，不启动模型。
 
-构建/pip 新增 [离线实际工具输出评测](BUILD_PIP_CONTRACTS.md)：执行 `python -X utf8 benchmark/build_pip_contracts.py`，验证 Python 编译、本地 wheel 安装、真实 pip renderer 和明确标注的混合诊断。全程无下载、不安装到当前环境；报告区分原生 stderr、合并流与换行变体，不代表编码质量测评。
+构建/pip 提供 [68 项离线输出评测](BUILD_PIP_CONTRACTS.md)：执行 `python -X utf8 benchmark/build_pip_contracts.py`，验证 Python 编译、本地 wheel 安装、真实 pip renderer 和明确标注的混合/彩色诊断。全程无下载、不安装到当前环境；报告区分原生 stderr、合并流与换行变体，不代表编码质量测评。
 
 文件搜索新增 [诊断保护与实际 rg 验证](SEARCH_SAFETY.md)：只有明确的简单列举命令和可识别的文件记录才截取前 20 条；复合命令、路径形状的提示、NUL 及未知格式透传。`python -X utf8 benchmark/search_contracts.py` 用本机 ripgrep 和手动 Hook/CLI 验证，缺工具会保留失败分母，不调用模型。
 
@@ -44,7 +44,7 @@ v0.1–v0.3 Hook 不会被自动删除。若同项目仍有 v0.3 条目，应先
 |---|---|
 |pytest -v|命令和完成汇总匹配后聚合可信 Python 节点的 PASSED；保留其他状态、未知行和汇总；警告、捕获输出及报告段不聚合；实时输出歧义时整段透传|
 |unittest -v|需 Ran 汇总及 OK/FAILED；仅聚合可信标准成功行；报告尾部保留；文档/实时输出歧义时整段透传；默认 stderr 原样保留|
-|构建/重复警告|仅按 CR/LF/CRLF 折叠相邻完全相同的非严重记录；行内控制字符不作为记录边界，严重记录整条保留|
+|构建/重复警告|仅按 CR/LF/CRLF 折叠相邻完全相同的非严重记录；识别严重词时去除 ANSI CSI 颜色/控制码，输出原字节不变，严重记录及其次数保留；不是完整终端模拟器|
 |pip install|仅聚合整条匹配的已知进度格式；保留同一行内的错误、警告、未知尾部、版本和安装结果|
 |文件搜索|只对明确文件名列表压缩，内容搜索和未知格式不截断|
 |Git diff / Traceback|保守全局透传|

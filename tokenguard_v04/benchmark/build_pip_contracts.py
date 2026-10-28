@@ -45,6 +45,8 @@ def cases() -> tuple[Case, ...]:
         Case('compile_success', 'build'),
         Case('compile_error', 'build', 1),
         Case('compile_error_mixed', 'build', 1, True, mode='mixed'),
+        Case('compile_color_error', 'build', 1, mode='colored'),
+        Case('compile_color_error_mixed', 'build', 1, True, mode='colored_mixed'),
         Case('pip_install', 'pip'),
         Case('pip_error_native', 'pip', 1, variants=False),
         Case('pip_error_merged', 'pip', 1, mode='merged'),
@@ -152,8 +154,19 @@ def fixture(case: Case, workspace: Path, evidence: Path) -> dict:
         if case.mode == 'mixed':
             repeated = ADVISORY
             stdout = repeated * 200 + stdout
+        if case.mode in ('colored', 'colored_mixed'):
+            # Explicitly synthetic coloring/repetition of an actual diagnostic.
+            # compileall itself does not emit these colored repeated records.
+            diagnostic = next(line for line in lines(stdout) if line.startswith('SyntaxError:'))
+            colored = diagnostic.replace('SyntaxError:', 'SyntaxEr\x1b[31mror\x1b[0m:', 1)
+            stdout = colored * (200 if case.mode == 'colored' else 3) + stdout
+            if case.mode == 'colored_mixed':
+                repeated = ADVISORY
+                stdout = repeated * 200 + stdout
         command = 'python -m compileall -f src'
         provenance = 'actual local compileall' + ('; prepended synthetic duplicate advisories' if repeated else '')
+        if case.mode in ('colored', 'colored_mixed'):
+            provenance += '; prepended synthetically colored/repeated actual SyntaxError record'
     else:
         tool_version, version_error = invoke(['-m', 'pip', '--version'], 0)
         if not tool_version.startswith('pip ') or version_error:

@@ -57,7 +57,10 @@ def _rle(text: str, allow_warning: bool = False) -> str:
     # controls can occur inside one diagnostic/JSON record: splitting them
     # would hide inline fragments and bypass protection on the whole record.
     for line in io.StringIO(text, newline=''):
-        protected = PROTECTED.search(line) or (WARNING.search(line) and not allow_warning)
+        # Styling may split a severity word (ER<SGR>ROR). Recognize the rendered
+        # text while retaining the entire original record, including its bytes.
+        visible = ANSI.sub('', line)
+        protected = PROTECTED.search(visible) or (WARNING.search(visible) and not allow_warning)
         if line == previous and not protected:
             count += 1
             continue
@@ -186,7 +189,7 @@ def compress(text: str, min_chars: int = 3000, max_ratio: float = 0.85,
         strategy = 'file_search'
     else:
         candidate = _rle(text, allow_warning=True)
-        strategy = 'adjacent_duplicates' if kind == 'build' else ('repeated_warnings' if WARNING.search(text) else 'adjacent_duplicates')
+        strategy = 'adjacent_duplicates' if kind == 'build' else ('repeated_warnings' if WARNING.search(clean) else 'adjacent_duplicates')
     if len(candidate) >= len(text) * max_ratio:
         return text, 'insufficient_saving'
     return candidate, strategy

@@ -101,13 +101,14 @@ def test_fixture_environment_isolates_cache_color_and_user_hook_overrides(api, t
 
 def test_actual_offline_build_install_renderer_and_recovery(api, tmp_path):
     run = api['run']
-    names = ('compile_success', 'compile_error_mixed', 'pip_install', 'pip_renderer', 'pip_error_native')
+    names = ('compile_success', 'compile_error_mixed', 'compile_color_error',
+             'compile_color_error_mixed', 'pip_install', 'pip_renderer', 'pip_error_native')
     selected = tuple(case for case in api['cases']() if case.name in names)
     with patch.dict(run.__globals__, {'cases': lambda: selected}):
         folder = run(tmp_path)
     report = json.loads((folder / 'report.json').read_text(encoding='utf-8'))
     assert report['passed'] is True, report
-    assert report['successful_checks'] == report['expected_checks'] == 26
+    assert report['successful_checks'] == report['expected_checks'] == 38
     assert report['source_unchanged_during_run'] is True
     assert all(row['valid'] for row in report['fixtures'])
     assert report['model_api_calls'] == 0
@@ -116,6 +117,8 @@ def test_actual_offline_build_install_renderer_and_recovery(api, tmp_path):
 
 
 @pytest.mark.parametrize('mutation,case_name,relative,old,new,expected_error', [
+    ('colored_severity', 'compile_color_error_mixed', 'tokenguard/core.py',
+     "visible = ANSI.sub('', line)", 'visible = line', 'RLE expansion differs'),
     ('prefix', 'pip_renderer_inline_error', 'tokenguard/core.py',
      'match = matcher.fullmatch(clean)', 'match = matcher.match(clean)', 'non-progress line lost'),
     ('stderr', 'pip_renderer_native_error', 'tokenguard/hook.py',
